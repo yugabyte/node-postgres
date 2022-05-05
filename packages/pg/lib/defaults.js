@@ -21,6 +21,12 @@ module.exports = {
   // database port
   port: 5432,
 
+  // Load Balance feature variable
+  load_balance: false,
+
+  // Topology keys
+  topology_keys: '',
+
   // number of rows to return at a time from a prepared statement's
   // portal. 0 will return all rows at once
   rows: 0,

@@ -11,6 +11,19 @@ var ConnectionParameters = require('./connection-parameters')
 var Query = require('./query')
 var defaults = require('./defaults')
 var Connection = require('./connection')
+var pg = require('pg')
+const { getServers } = require('dns')
+const { Server } = require('http')
+const { truncate } = require('fs')
+
+class ServerInfo {
+  constructor(hostName, port, placementInfo, public_ip) {
+    this.hostName = hostName
+    this.port = port
+    this.placementInfo = placementInfo
+    this.public_ip = public_ip
+  }
+}
 
 class Client extends EventEmitter {
   constructor(config) {
@@ -21,7 +34,9 @@ class Client extends EventEmitter {
     this.database = this.connectionParameters.database
     this.port = this.connectionParameters.port
     this.host = this.connectionParameters.host
-
+    this.load_balance = this.connectionParameters.load_balance
+    this.topology_keys = this.connectionParameters.topology_keys
+    // console.log(this.connectionParameters)
     // "hiding" the password so it doesn't show up in stack traces
     // or if the client is console.logged
     Object.defineProperty(this, 'password', {
@@ -69,6 +84,15 @@ class Client extends EventEmitter {
     this._connectionTimeoutMillis = c.connectionTimeoutMillis || 0
   }
 
+  static controlConnection = undefined
+  static checkFirst = false
+  static lastTimeMetaDataFetched = new Date().getTime() / 1000
+  static serversList = []
+  static connectionMap = new Map()
+  static failedHosts = []
+  static hostPublicIPMap = new Map()
+  static REFRESING_TIME = 300 // secs
+
   _errorAllQueries(err) {
     const enqueueError = (query) => {
       process.nextTick(() => {
@@ -85,11 +109,33 @@ class Client extends EventEmitter {
     this.queryQueue.length = 0
   }
 
+  getLeastLoadedServer() {
+    let minConnectionCount = Number.MAX_VALUE
+    let leastLoadedHosts = []
+    let hosts = Client.connectionMap.keys()
+    for (let value of hosts) {
+      let host = value
+      let hostCount = Client.connectionMap.get(host)
+      if (minConnectionCount > hostCount) {
+        leastLoadedHosts = []
+        minConnectionCount = hostCount
+        leastLoadedHosts.push(host)
+      } else if (minConnectionCount === hostCount) {
+        leastLoadedHosts.push(host)
+      }
+    }
+    let randomIdx = Math.floor(Math.random() * leastLoadedHosts.length - 1) + 1
+    let leastLoadedHost = leastLoadedHosts[randomIdx]
+    let prevCount = Client.connectionMap.get(leastLoadedHost)
+    Client.connectionMap.set(leastLoadedHost, prevCount + 1)
+    console.log(Client.connectionMap)
+    return leastLoadedHost
+  }
+
   _connect(callback) {
     var self = this
     var con = this.connection
     this._connectionCallback = callback
-
     if (this._connecting || this._connected) {
       const err = new Error('Client has already been connected. You cannot reuse a client.')
       process.nextTick(() => {
@@ -105,6 +151,18 @@ class Client extends EventEmitter {
         con._ending = true
         con.stream.destroy(new Error('timeout expired'))
       }, this._connectionTimeoutMillis)
+    }
+    if (this.connectionParameters.load_balance) {
+      if (Client.serversList.length === 0) {
+        const err = new Error('No servers are there to take up the connection!')
+        process.nextTick(() => {
+          callback(err)
+        })
+        return
+      }
+      this.host = this.getLeastLoadedServer()
+      // console.log('host', this.host)
+    } else {
     }
 
     if (this.host && this.host.indexOf('/') === 0) {
@@ -156,7 +214,44 @@ class Client extends EventEmitter {
     })
   }
 
-  connect(callback) {
+  async getConnection(connectionString) {
+    var client = new pg.Client(connectionString)
+    await client.connect()
+    return client
+  }
+
+  async getServersInfo() {
+    var client = Client.controlConnection
+    var result = await client.query('SELECT * FROM yb_servers()')
+    return result
+  }
+
+  createServersList(data) {
+    Client.serversList.splice(0, Client.serversList.length)
+    data.forEach((eachServer) => {
+      var placementInfo = eachServer.cloud + '.' + eachServer.region + '.' + eachServer.zone
+      var server = new ServerInfo(eachServer.host, eachServer.port, placementInfo, eachServer.public_ip)
+      Client.serversList.push(server)
+    })
+    data.forEach((eachServer) => {
+      Client.hostPublicIPMap.set(eachServer.host, eachServer.public_ip)
+    })
+  }
+
+  createConnectionMap(data) {
+    Client.connectionMap.clear()
+    data.forEach((eachServer) => {
+      Client.connectionMap.set(eachServer.host, 0)
+    })
+  }
+
+  createMetaData(data) {
+    this.createServersList(data)
+    Client.lastTimeMetaDataFetched = new Date().getTime() / 1000
+    this.createConnectionMap(data)
+  }
+
+  nowConnect(callback) {
     if (callback) {
       this._connect(callback)
       return
@@ -171,6 +266,54 @@ class Client extends EventEmitter {
         }
       })
     })
+  }
+
+  updateConnectionMapAfterRefresh() {
+    for (let idx = 0; idx < Client.serversList.length; idx++) {
+      let host = Client.serversList[idx].hostName
+      if (!Client.connectionMap.has(host)) {
+        Client.connectionMap.set(host, 0)
+      }
+    }
+    for (var eachHost in Client.connectionMap) {
+      if (!Client.hostPublicIPMap.has(eachHost)) {
+        Client.connectionMap.delete(eachHost)
+        Client.failedHosts.push(eachHost)
+      }
+    }
+  }
+
+  connect(callback) {
+    if (!Client.checkFirst) {
+      this.getConnection('postgresql://yugabyte:yugabyte@localhost:5433/yugabyte')
+        .then((res) => {
+          Client.controlConnection = res
+          this.getServersInfo()
+            .then((res) => {
+              Client.checkFirst = true
+              this.createMetaData(res.rows)
+              this.nowConnect(callback)
+            })
+            .catch((err) => {})
+        })
+        .catch((err) => {})
+    } else {
+      let currentTime = new Date().getTime() / 1000
+      let diff = Math.floor(currentTime - Client.lastTimeMetaDataFetched)
+      // console.log(diff)
+      if (diff > Client.REFRESING_TIME) {
+        this.getServersInfo()
+          .then((res) => {
+            this.createServersList(res.rows)
+            Client.lastTimeMetaDataFetched = new Date().getTime() / 1000
+            this.updateConnectionMapAfterRefresh()
+            this.nowConnect(callback)
+          })
+          .catch((err) => {})
+      } else {
+        this.nowConnect(callback)
+      }
+    }
   }
 
   _attachListeners(con) {
@@ -612,6 +755,8 @@ class Client extends EventEmitter {
         this.connection.once('end', resolve)
       })
     }
+    let prevCount = Client.connectionMap.get(this.host)
+    Client.connectionMap.set(this.host, prevCount - 1)
   }
 }
 

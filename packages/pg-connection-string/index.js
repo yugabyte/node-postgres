@@ -26,11 +26,11 @@ function parse(str) {
       config[k] = config[k][config[k].length - 1]
     }
   }
+  config.load_balance = config.load_balance === 'true'
 
   var auth = (result.auth || ':').split(':')
   config.user = auth[0]
   config.password = auth.splice(1).join(':')
-
   config.port = result.port
   if (result.protocol == 'socket:') {
     config.host = decodeURI(result.pathname)
