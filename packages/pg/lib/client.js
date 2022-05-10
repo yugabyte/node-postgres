@@ -12,6 +12,7 @@ var Query = require('./query')
 var defaults = require('./defaults')
 var Connection = require('./connection')
 var pg = require('pg')
+const dns = require('dns')
 const { getServers } = require('dns')
 const { Server } = require('http')
 const { truncate } = require('fs')
@@ -189,13 +190,15 @@ class Client extends EventEmitter {
     var self = this
     var con = this.connection
     this._connectionCallback = callback
-    // if (this._connecting || this._connected) {
-    //   const err = new Error('Client has already been connected. You cannot reuse a client.')
-    //    process.nextTick(() => {
-    //      callback(err)
-    //   })
-    // return
-    // }
+    if (this._connecting || this._connected) {
+      if (!this.connectionParameters.load_balance) {
+        const err = new Error('Client has already been connected. You cannot reuse a client.')
+        process.nextTick(() => {
+          callback(err)
+        })
+        return
+      }
+    }
     this._connecting = true
 
     this.connectionTimeoutHandle
@@ -281,19 +284,39 @@ class Client extends EventEmitter {
 
   attachErrorListenerOnClientConnection(client) {
     client.on('error', () => {
-      let hosts = Client.hostServerInfo.keys()
-      let upHost = hosts.next().value
-      let newConnectionString = 'postgresql://yugabyte:yugabyte@' + upHost + ':5433/'
-      this.getConnection(newConnectionString).then((res) => {
-        Client.controlClient = res
-      })
+      if (Client.hostServerInfo.has(client.host)) {
+        Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
+      }
+      Client.connectionMap.delete(client.host)
+      Client.hostServerInfo.delete(client.host)
+      Client.controlClient = undefined
     })
   }
 
-  async getConnection(connectionString) {
-    var client = new pg.Client(connectionString)
+  async getConnection() {
+    let currConnectionString = this.connectionString
+    var client = new Client(currConnectionString)
     this.attachErrorListenerOnClientConnection(client)
-    await client.connect()
+    const options = {
+      family: 4, // todo IPv6 handling
+      hints: dns.ADDRCONFIG,
+    }
+    let lookup = util.promisify(dns.lookup)
+    await lookup(client.host, options).then((res) => {
+      client.host = res.address
+      client.connectionParameters.host = client.host
+      client.load_balance = false
+      client.connectionParameters.load_balance = false
+      client.topology_keys = ''
+      client.connectionParameters.topology_keys = ''
+      if (Client.failedHosts.has(client.host)) {
+        let upHostsList = Client.hostServerInfo.keys()
+        let upHost = upHostsList.next().value
+        client.host = upHost
+        client.connectionParameters.host = client.host
+      }
+    })
+    await client.nowConnect()
     return client
   }
 
@@ -404,14 +427,14 @@ class Client extends EventEmitter {
     return diff >= Client.REFRESING_TIME
   }
 
-  connect(callback) {
+  connect(i, callback) {
     if (!this.connectionParameters.load_balance) {
       return this.nowConnect(callback)
     }
     lock.acquire().then(() => {
       if (Client.controlClient === undefined) {
         // console.log('lock acquired first by', i)
-        this.getConnection(this.connectionString)
+        this.getConnection()
           .then(async (res) => {
             Client.controlClient = res
             this.getServersInfo()
@@ -461,9 +484,6 @@ class Client extends EventEmitter {
               this.nowConnect(callback)
                 .then((res) => {
                   result = res
-                  lock.release()
-                  // console.log(Client.connectionMap)
-                  // console.log('lock release after refresh by', i)
                 })
                 .catch((err) => {
                   if (Client.hostServerInfo.has(this.host)) {
@@ -474,10 +494,10 @@ class Client extends EventEmitter {
                   this.nowConnect(callback).then((res) => {
                     result = res
                   })
-                  lock.release()
-                  // console.log(Client.connectionMap)
-                  // console.log('lock release after refresh by error', i)
                 })
+              lock.release()
+              // console.log(Client.connectionMap)
+              // console.log('lock release after refresh by error', i)
               return result
             })
             .catch((err) => {
@@ -495,10 +515,6 @@ class Client extends EventEmitter {
           this.nowConnect(callback)
             .then((res) => {
               result = res
-              lock.release()
-              // console.log(Client.connectionMap)
-              // console.log('lock release without refresh by no error', i)
-              return result
             })
             .catch(() => {
               if (Client.hostServerInfo.has(this.host)) {
@@ -509,11 +525,11 @@ class Client extends EventEmitter {
               this.nowConnect(callback).then((res) => {
                 result = res
               })
-              lock.release()
-              // console.log(Client.connectionMap)
-              // console.log('lock release without refresh by no error', i)
-              return result
             })
+          lock.release()
+          // console.log(Client.connectionMap)
+          // console.log('lock release without refresh by  error', i)
+          return result
         }
       }
     })

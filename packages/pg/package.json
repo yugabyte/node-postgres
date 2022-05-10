@@ -11,10 +11,10 @@
     "postgresql",
     "rdbms"
   ],
-  "homepage": "https://github.com/brianc/node-postgres",
+  "homepage": "https://github.com/yugabyte/node-postgres",
   "repository": {
     "type": "git",
-    "url": "git://github.com/brianc/node-postgres.git",
+    "url": "git://github.com/yugabyte/node-postgres.git",
     "directory": "packages/pg"
   },
   "author": "Brian Carlson <brian.m.carlson@gmail.com>",
@@ -22,7 +22,6 @@
   "dependencies": {
     "buffer-writer": "2.0.0",
     "packet-reader": "1.0.0",
-    "pg": "^8.7.3",
     "pg-connection-string": "^2.5.0",
     "pg-pool": "^3.5.1",
     "pg-protocol": "^1.5.0",
