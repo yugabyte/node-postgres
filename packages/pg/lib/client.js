@@ -185,7 +185,18 @@ class Client extends EventEmitter {
     }
     return true
   }
-
+  incrementConnectionCount() {
+    let prevCount = 0
+    if (Client.connectionMap.has(this.host)) {
+      prevCount = Client.connectionMap.get(this.host)
+    } else {
+      let serverInfo = Client.failedHosts.get(this.host)
+      Client.hostServerInfo.set(this.host, serverInfo)
+      Client.failedHosts.delete(this.host)
+    }
+    // console.log('inc cnt', this.host)
+    Client.connectionMap.set(this.host, prevCount + 1)
+  }
   _connect(callback) {
     var self = this
     var con = this.connection
@@ -227,20 +238,11 @@ class Client extends EventEmitter {
     } else {
       con.connect(this.port, this.host)
     }
+    // console.log('_connect() - connection created to', this.host)
 
-    if (this.connectionParameters.load_balance) {
-      let prevCount = 0
-      if (Client.connectionMap.has(this.host)) {
-        prevCount = Client.connectionMap.get(this.host)
-      } else {
-        let serverInfo = Client.failedHosts.get(this.host)
-        Client.hostServerInfo.set(this.host, serverInfo)
-        Client.failedHosts.delete(this.host)
-      }
-      Client.connectionMap.set(this.host, prevCount + 1)
-    }
     // once connection is established send startup message
     con.on('connect', function () {
+      // console.log("_connect() in on('connect') - connection created to", this.host)
       if (self.ssl) {
         con.requestSsl()
       } else {
@@ -445,6 +447,7 @@ class Client extends EventEmitter {
                   .then((res) => {
                     result = res
                     lock.release()
+                    this.incrementConnectionCount()
                     // console.log(Client.connectionMap)
                     // console.log('lock released first by', i)
                   })
@@ -456,6 +459,10 @@ class Client extends EventEmitter {
                     Client.hostServerInfo.delete(this.host)
                     this.nowConnect(callback).then((res) => {
                       result = res
+                      this.incrementConnectionCount()
+                      lock.release()
+                      // console.log(Client.connectionMap)
+                      // console.log('lock released first by', i)
                     })
                   })
                 return result
@@ -463,6 +470,7 @@ class Client extends EventEmitter {
               .catch((err) => {
                 let result = this.nowConnect(callback)
                 lock.release()
+                // console.log(Client.connectionMap)
                 // console.log('lock released first by', i)
                 return result
               })
@@ -470,6 +478,7 @@ class Client extends EventEmitter {
           .catch((err) => {
             let result = this.nowConnect(callback)
             lock.release()
+            // console.log(Client.connectionMap)
             // console.log('lock released first by', i)
             return result
           })
@@ -484,6 +493,11 @@ class Client extends EventEmitter {
               this.nowConnect(callback)
                 .then((res) => {
                   result = res
+                  this.incrementConnectionCount()
+                  lock.release()
+                  // console.log(Client.connectionMap)
+                  // console.log('lock release after refresh by error', i)
+                  return result
                 })
                 .catch((err) => {
                   if (Client.hostServerInfo.has(this.host)) {
@@ -493,21 +507,23 @@ class Client extends EventEmitter {
                   Client.hostServerInfo.delete(this.host)
                   this.nowConnect(callback).then((res) => {
                     result = res
+                    this.incrementConnectionCount()
+                    lock.release()
+                    // console.log(Client.connectionMap)
+                    // console.log('lock release after refresh by error', i)
                   })
+                  return result
                 })
-              lock.release()
-              // console.log(Client.connectionMap)
-              // console.log('lock release after refresh by error', i)
-              return result
             })
             .catch((err) => {
               this.nowConnect(callback).then((res) => {
                 result = res
+                this.incrementConnectionCount()
+                lock.release()
+                // console.log(Client.connectionMap)
+                // console.log('lock release after refresh by', i)
+                return result
               })
-              lock.release()
-              // console.log(Client.connectionMap)
-              // console.log('lock release after refresh by', i)
-              return result
             })
         } else {
           // console.log('lock acquired without refresh by', i)
@@ -515,6 +531,11 @@ class Client extends EventEmitter {
           this.nowConnect(callback)
             .then((res) => {
               result = res
+              this.incrementConnectionCount()
+              lock.release()
+              // console.log(Client.connectionMap)
+              // console.log('lock release without refresh by', i)
+              return result
             })
             .catch(() => {
               if (Client.hostServerInfo.has(this.host)) {
@@ -522,14 +543,15 @@ class Client extends EventEmitter {
               }
               Client.connectionMap.delete(this.host)
               Client.hostServerInfo.delete(this.host)
-              this.nowConnect(callback).then((res) => {
+              this.nowConnect(callback).then((res) => { //retries untill successful or connectionMap empty
                 result = res
+                this.incrementConnectionCount()
               })
+              lock.release()
+              // console.log(Client.connectionMap)
+              // console.log('lock release without refresh by  error', i)
+              return result
             })
-          lock.release()
-          // console.log(Client.connectionMap)
-          // console.log('lock release without refresh by  error', i)
-          return result
         }
       }
     })
@@ -661,6 +683,7 @@ class Client extends EventEmitter {
       // TODO(bmc): this is swallowing errors - we shouldn't do this
       return
     }
+    // console.log('in _handleErrorWhileConnecting')
     this._connectionError = true
     clearTimeout(this.connectionTimeoutHandle)
     if (this._connectionCallback) {
@@ -678,6 +701,7 @@ class Client extends EventEmitter {
     }
     this._queryable = false
     this._errorAllQueries(err)
+    // console.log('in _handleErrorEvent now emitting error')
     this.emit('error', err)
   }
 
