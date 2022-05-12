@@ -11,11 +11,7 @@ var ConnectionParameters = require('./connection-parameters')
 var Query = require('./query')
 var defaults = require('./defaults')
 var Connection = require('./connection')
-var pg = require('pg')
 const dns = require('dns')
-const { getServers } = require('dns')
-const { Server } = require('http')
-const { truncate } = require('fs')
 
 class ServerInfo {
   constructor(hostName, port, placementInfo, public_ip) {
