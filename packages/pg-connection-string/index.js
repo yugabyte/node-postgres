@@ -26,7 +26,6 @@ function parse(str) {
       config[k] = config[k][config[k].length - 1]
     }
   }
-  config.load_balance = config.load_balance === 'true'
 
   var auth = (result.auth || ':').split(':')
   config.user = auth[0]

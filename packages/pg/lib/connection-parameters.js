@@ -95,6 +95,7 @@ class ConnectionParameters {
     this.load_balance = val('load_balance', config)
     this.topology_keys = val('topology_keys', config)
 
+    this.load_balance = this.load_balance === 'true'
     if (this.topology_keys !== '') {
       if (!this.load_balance) {
         //Error or this?
