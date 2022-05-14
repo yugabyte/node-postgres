@@ -1,7 +1,7 @@
 {
-  "name": "pg_ybdb",
-  "version": "1.0.0",
-  "description": "PostgreSQL client - pure javascript & libpq with the same API with Smart Driver Features",
+  "name": "pg-yugabytedb",
+  "version": "1.0.0-alpha",
+  "description": "PostgreSQL client - pure javascript & libpq with the same API with YugabyteDB Smart Driver Features.",
   "keywords": [
     "database",
     "libpq",
@@ -9,6 +9,7 @@
     "postgre",
     "postgres",
     "postgresql",
+    "yugabytedb",
     "rdbms"
   ],
   "homepage": "https://github.com/yugabyte/node-postgres",
@@ -18,6 +19,9 @@
     "directory": "packages/pg"
   },
   "author": "Brian Carlson <brian.m.carlson@gmail.com>",
+  "contributors": [
+    ""
+  ],
   "main": "./lib",
   "dependencies": {
     "buffer-writer": "2.0.0",
