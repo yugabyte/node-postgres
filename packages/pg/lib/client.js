@@ -99,6 +99,7 @@ class Client extends EventEmitter {
     this.secretKey = null
     this.ssl = this.connectionParameters.ssl || false
     this.config = config
+    this.prevHostIfUsePublic = this.host
     // As with Password, make SSL->Key (the private key) non-enumerable.
     // It won't show up in stack traces
     // or if the client is console.logged
@@ -119,7 +120,6 @@ class Client extends EventEmitter {
   static hostServerInfo = new Map()
   static usePublic = false
   static topologyKeySet = new Set()
-  static publicIPsList = new Set()
   static REFRESING_TIME = 300 // secs
   static doHardRefresh = false
 
@@ -193,14 +193,18 @@ class Client extends EventEmitter {
   }
   incrementConnectionCount() {
     let prevCount = 0
-    if (Client.connectionMap.has(this.host)) {
-      prevCount = Client.connectionMap.get(this.host)
-    } else if (Client.failedHosts.has(this.host)) {
-      let serverInfo = Client.failedHosts.get(this.host)
-      Client.hostServerInfo.set(this.host, serverInfo)
-      Client.failedHosts.delete(this.host)
+    let host = this.host
+    if (Client.usePublic) {
+      host = this.prevHostIfUsePublic
     }
-    Client.connectionMap.set(this.host, prevCount + 1)
+    if (Client.connectionMap.has(host)) {
+      prevCount = Client.connectionMap.get(host)
+    } else if (Client.failedHosts.has(host)) {
+      let serverInfo = Client.failedHosts.get(host)
+      Client.hostServerInfo.set(host, serverInfo)
+      Client.failedHosts.delete(host)
+    }
+    Client.connectionMap.set(host, prevCount + 1)
   }
   _connect(callback) {
     var self = this
@@ -235,16 +239,18 @@ class Client extends EventEmitter {
       }, this._connectionTimeoutMillis)
     }
     if (this.connectionParameters.load_balance) {
-      if (!this.checkConnectionMapEmpty()) {
+      if (!this.checkConnectionMapEmpty() && Client.hostServerInfo.size) {
         this.host = this.getLeastLoadedServer(Client.connectionMap)
-      } else {
+        this.port = Client.hostServerInfo.get(this.host).port
+      } else if (Client.failedHosts.size) {
         this.host = this.getLeastLoadedServer(Client.failedHosts)
+        this.port = Client.failedHosts.get(this.host).port
       }
     }
-
     if (Client.usePublic) {
       let currentHost = this.host
       let serverInfo = Client.hostServerInfo.get(currentHost)
+      this.prevHostIfUsePublic = currentHost
       this.host = serverInfo.public_ip
     }
 
@@ -312,12 +318,8 @@ class Client extends EventEmitter {
     let currConnectionString = this.connectionString
     var client = new Client(currConnectionString)
     this.attachErrorListenerOnClientConnection(client)
-    const options = {
-      family: 4, // todo IPv6 handling
-      hints: dns.ADDRCONFIG,
-    }
     let lookup = util.promisify(dns.lookup)
-    await lookup(client.host, options).then((res) => {
+    await lookup(client.host).then((res) => {
       client.host = res.address
       client.connectionParameters.host = client.host
       client.load_balance = false
@@ -365,11 +367,10 @@ class Client extends EventEmitter {
         Client.placementInfoHostMap.set(placementInfo, [eachServer.host])
       }
       Client.hostServerInfo.set(eachServer.host, server)
-      Client.publicIPsList.add(eachServer.public_ip)
+      if (eachServer.public_ip === this.host) {
+        Client.usePublic = true
+      }
     })
-    if (Client.publicIPsList.has(this.host)) {
-      Client.usePublic = true
-    }
   }
 
   createConnectionMap(data) {
