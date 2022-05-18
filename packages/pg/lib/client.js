@@ -319,21 +319,41 @@ class Client extends EventEmitter {
     var client = new Client(currConnectionString)
     this.attachErrorListenerOnClientConnection(client)
     let lookup = util.promisify(dns.lookup)
-    await lookup(client.host).then((res) => {
-      client.host = res.address
-      client.connectionParameters.host = client.host
+    let addresses = [client.host]
+    await lookup(client.host, { family: 0, all: true }).then((res) => {
+      addresses = res
       client.load_balance = false
       client.connectionParameters.load_balance = false
       client.topology_keys = ''
       client.connectionParameters.topology_keys = ''
+    })
+    for (let idx = 0; idx < addresses.length; idx++) {
+      client.host = addresses[idx].address
+      client.connectionParameters.host = client.host
       if (Client.failedHosts.has(client.host)) {
         let upHostsList = Client.hostServerInfo.keys()
         let upHost = upHostsList.next().value
         client.host = upHost
         client.connectionParameters.host = client.host
       }
-    })
-    await client.nowConnect()
+      await client
+        .nowConnect()
+        .then(() => {
+          idx = addresses.length
+        })
+        .catch((err) => {
+          client.connection =
+            client.config.connection ||
+            new Connection({
+              stream: client.config.stream,
+              ssl: client.connectionParameters.ssl,
+              keepAlive: client.config.keepAlive || false,
+              keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+              encoding: client.connectionParameters.client_encoding || 'utf8',
+            })
+          client._connecting = false
+        })
+    }
     return client
   }
 
