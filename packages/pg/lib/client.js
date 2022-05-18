@@ -322,38 +322,41 @@ class Client extends EventEmitter {
     let addresses = [client.host]
     await lookup(client.host, { family: 0, all: true }).then((res) => {
       addresses = res
-      client.load_balance = false
-      client.connectionParameters.load_balance = false
-      client.topology_keys = ''
-      client.connectionParameters.topology_keys = ''
     })
-    for (let idx = 0; idx < addresses.length; idx++) {
-      client.host = addresses[idx].address
-      client.connectionParameters.host = client.host
-      if (Client.failedHosts.has(client.host)) {
-        let upHostsList = Client.hostServerInfo.keys()
-        let upHost = upHostsList.next().value
-        client.host = upHost
-        client.connectionParameters.host = client.host
-      }
-      await client
-        .nowConnect()
-        .then(() => {
-          idx = addresses.length
-        })
-        .catch((err) => {
-          client.connection =
-            client.config.connection ||
-            new Connection({
-              stream: client.config.stream,
-              ssl: client.connectionParameters.ssl,
-              keepAlive: client.config.keepAlive || false,
-              keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
-              encoding: client.connectionParameters.client_encoding || 'utf8',
-            })
-          client._connecting = false
-        })
+    client.host = addresses[0].address // If both resolved then - IPv6 else IPv4
+    client.load_balance = false
+    client.connectionParameters.load_balance = false
+    client.topology_keys = ''
+    client.connectionParameters.topology_keys = ''
+    if (Client.failedHosts.has(client.host)) {
+      let upHostsList = Client.hostServerInfo.keys()
+      let upHost = upHostsList.next().value
+      client.host = upHost
     }
+    client.connectionParameters.host = client.host
+    await client.nowConnect().catch(async (err) => {
+      client.connection =
+        client.config.connection ||
+        new Connection({
+          stream: client.config.stream,
+          ssl: client.connectionParameters.ssl,
+          keepAlive: client.config.keepAlive || false,
+          keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+          encoding: client.connectionParameters.client_encoding || 'utf8',
+        })
+      client._connecting = false
+      if (addresses.length === 2) {
+        // If both resolved
+        client.host = addresses[1].address // IPv4
+        if (Client.failedHosts.has(client.host)) {
+          let upHostsList = Client.hostServerInfo.keys()
+          let upHost = upHostsList.next().value
+          client.host = upHost
+        }
+        client.connectionParameters.host = client.host
+        await client.nowConnect()
+      }
+    })
     return client
   }
 
@@ -368,7 +371,7 @@ class Client extends EventEmitter {
       .catch((err) => {
         this.getConnection(this.connectionString).then(async (res) => {
           Client.controlClient = res
-          await getServersInfo()
+          await this.getServersInfo()
         })
       })
     return result
