@@ -100,6 +100,7 @@ class Client extends EventEmitter {
     this.ssl = this.connectionParameters.ssl || false
     this.config = config
     this.prevHostIfUsePublic = this.host
+    this.urlHost = this.host
     // As with Password, make SSL->Key (the private key) non-enumerable.
     // It won't show up in stack traces
     // or if the client is console.logged
@@ -253,7 +254,6 @@ class Client extends EventEmitter {
       this.prevHostIfUsePublic = currentHost
       this.host = serverInfo.public_ip
     }
-
     if (this.host && this.host.indexOf('/') === 0) {
       con.connect(this.host + '/.s.PGSQL.' + this.port)
     } else {
@@ -319,7 +319,7 @@ class Client extends EventEmitter {
     var client = new Client(currConnectionString)
     this.attachErrorListenerOnClientConnection(client)
     let lookup = util.promisify(dns.lookup)
-    let addresses = [client.host]
+    let addresses = [{ address: client.host }]
     await lookup(client.host, { family: 0, all: true }).then((res) => {
       addresses = res
     })
@@ -448,7 +448,23 @@ class Client extends EventEmitter {
               }
               if (this.checkConnectionMapEmpty() && Client.failedHosts.size === 0) {
                 lock.release()
-                callback(error)
+                // try with url host and mark that connection type as non-load_balanced
+                this.host = this.urlHost
+                this.connectionParameters.host = this.host
+                this.connectionParameters.load_balance = false
+                this.connection =
+                this.config.connection ||
+                new Connection({
+                  stream: this.config.stream,
+                  ssl: this.connectionParameters.ssl,
+                  keepAlive: this.config.keepAlive || false,
+                  keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
+                  encoding: this.connectionParameters.client_encoding || 'utf8',
+                })
+                this._connecting = false
+                Client.hostServerInfo.clear()
+                Client.connectionMap.clear()
+                this.connect(callback)
                 return
               }
               lock.release()
@@ -485,7 +501,22 @@ class Client extends EventEmitter {
             }
             if (this.checkConnectionMapEmpty() && Client.failedHosts.size === 0) {
               lock.release()
-              reject(error)
+              this.host = this.urlHost
+              this.connectionParameters.host = this.host
+              this.connectionParameters.load_balance = false
+              this.connection =
+              this.config.connection ||
+              new Connection({
+                stream: this.config.stream,
+                ssl: this.connectionParameters.ssl,
+                keepAlive: this.config.keepAlive || false,
+                keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
+                encoding: this.connectionParameters.client_encoding || 'utf8',
+              })
+              this._connecting = false
+              Client.hostServerInfo.clear()
+              Client.connectionMap.clear()
+              this.connect(callback)
               return
             }
             lock.release()
