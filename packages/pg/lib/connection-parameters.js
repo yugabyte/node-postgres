@@ -92,16 +92,15 @@ class ConnectionParameters {
         enumerable: false,
       })
     }
-    this.load_balance = val('load_balance', config)
-    this.topology_keys = val('topology_keys', config)
+    this.loadBalance = val('loadBalance', config)
+    this.topologyKeys = val('topologyKeys', config)
 
-    if (typeof this.load_balance === 'string') {
-      this.load_balance = this.load_balance === 'true'
+    if (typeof this.loadBalance === 'string') {
+      this.loadBalance = this.loadBalance === 'true'
     }
-    if (this.topology_keys !== '') {
-      if (!this.load_balance) {
-        //Error or this?
-        this.topology_keys = ''
+    if (this.topologyKeys !== '') {
+      if (!this.loadBalance) {
+        throw new Error(' You need to enable Load Balance feature to use Topology Aware! ')
       }
     }
     this.client_encoding = val('client_encoding', config)
@@ -141,8 +140,8 @@ class ConnectionParameters {
     add(params, this, 'fallback_application_name')
     add(params, this, 'connect_timeout')
     add(params, this, 'options')
-    add(params, this, 'load_balance')
-    add(params, this, 'topology_keys')
+    add(params, this, 'loadBalance')
+    add(params, this, 'topologyKeys')
 
     var ssl = typeof this.ssl === 'object' ? this.ssl : this.ssl ? { sslmode: this.ssl } : {}
     add(params, ssl, 'sslmode')
