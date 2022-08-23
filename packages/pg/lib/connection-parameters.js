@@ -14,6 +14,7 @@ var val = function (key, config, envVar) {
   } else {
     envVar = process.env[envVar]
   }
+
   return config[key] || envVar || defaults[key]
 }
 

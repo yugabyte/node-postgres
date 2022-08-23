@@ -114,16 +114,24 @@ class Client extends EventEmitter {
 
     this._connectionTimeoutMillis = c.connectionTimeoutMillis || 0
   }
-
+  // Control Connection
   static controlClient = undefined
   static lastTimeMetaDataFetched = new Date().getTime() / 1000
+  // Map of host -> connectionCount
   static connectionMap = new Map()
+  // Map of failedHost -> ServerInfo of host
   static failedHosts = new Map()
+  // Map of placementInfoOfHost -> list of Hosts
   static placementInfoHostMap = new Map()
+  // Map of Host -> ServerInfo
   static hostServerInfo = new Map()
+  // Boolean to check if public IP needs to be used or not
   static usePublic = false
+  // Set of topology Keys provided in URL
   static topologyKeySet = new Set()
+  // time to refresh the ServerMetaData
   static REFRESING_TIME = 300 // secs
+  // Boolean to Refresh ServerMetaData manually (for testing purpose).
   static doHardRefresh = false
 
   _errorAllQueries(err) {
@@ -331,33 +339,79 @@ class Client extends EventEmitter {
     client.connectionParameters.topologyKeys = ''
     if (Client.failedHosts.has(client.host)) {
       let upHostsList = Client.hostServerInfo.keys()
-      let upHost = upHostsList.next().value
-      client.host = upHost
-    }
-    client.connectionParameters.host = client.host
-    await client.nowConnect().catch(async (err) => {
-      client.connection =
-        client.config.connection ||
-        new Connection({
-          stream: client.config.stream,
-          ssl: client.connectionParameters.ssl,
-          keepAlive: client.config.keepAlive || false,
-          keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
-          encoding: client.connectionParameters.client_encoding || 'utf8',
-        })
-      client._connecting = false
-      if (addresses.length === 2) {
-        // If both resolved
-        client.host = addresses[1].address // IPv4
-        if (Client.failedHosts.has(client.host)) {
-          let upHostsList = Client.hostServerInfo.keys()
-          let upHost = upHostsList.next().value
-          client.host = upHost
-        }
+      let upHost = upHostsList.next()
+      let hostIsUp = false
+      while (upHost !== undefined && !hostIsUp) {
+        client.host = upHost.value
         client.connectionParameters.host = client.host
-        await client.nowConnect()
+        await client
+          .nowConnect()
+          .then((res) => {
+            hostIsUp = true
+          })
+          .catch((err) => {
+            client.connection =
+              client.config.connection ||
+              new Connection({
+                stream: client.config.stream,
+                ssl: client.connectionParameters.ssl,
+                keepAlive: client.config.keepAlive || false,
+                keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+                encoding: client.connectionParameters.client_encoding || 'utf8',
+              })
+            client._connecting = false
+            upHost = upHostsList.next()
+          })
       }
-    })
+    } else {
+      client.connectionParameters.host = client.host
+      await client.nowConnect().catch(async (err) => {
+        client.connection =
+          client.config.connection ||
+          new Connection({
+            stream: client.config.stream,
+            ssl: client.connectionParameters.ssl,
+            keepAlive: client.config.keepAlive || false,
+            keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+            encoding: client.connectionParameters.client_encoding || 'utf8',
+          })
+        client._connecting = false
+        if (addresses.length === 2) {
+          // If both resolved
+          client.host = addresses[1].address // IPv4
+          if (Client.failedHosts.has(client.host)) {
+            let upHostsList = Client.hostServerInfo.keys()
+            let upHost = upHostsList.next()
+            let hostIsUp = false
+            while (upHost !== undefined && !hostIsUp) {
+              client.host = upHost.value
+              client.connectionParameters.host = client.host
+              await client
+                .nowConnect()
+                .then((res) => {
+                  hostIsUp = true
+                })
+                .catch(async (err) => {
+                  client.connection =
+                    client.config.connection ||
+                    new Connection({
+                      stream: client.config.stream,
+                      ssl: client.connectionParameters.ssl,
+                      keepAlive: client.config.keepAlive || false,
+                      keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+                      encoding: client.connectionParameters.client_encoding || 'utf8',
+                    })
+                  client._connecting = false
+                  upHost = upHostsList.next()
+                })
+            }
+          } else {
+            client.connectionParameters.host = client.host
+            await client.nowConnect()
+          }
+        }
+      })
+    }
     return client
   }
 
@@ -370,10 +424,14 @@ class Client extends EventEmitter {
         result = res
       })
       .catch((err) => {
-        this.getConnection().then(async (res) => {
-          Client.controlClient = res
-          await this.getServersInfo()
-        })
+        this.getConnection()
+          .then(async (res) => {
+            Client.controlClient = res
+            await this.getServersInfo()
+          })
+          .catch((err) => {
+            return this.nowConnect(callback)
+          })
       })
     return result
   }
@@ -411,7 +469,7 @@ class Client extends EventEmitter {
       if (this.isValidKey(key)) {
         Client.topologyKeySet.add(key)
       } else {
-        // Error if not valid
+        throw new Error('Bad Topology Key found - ' + key)
       }
     }
   }
@@ -431,8 +489,7 @@ class Client extends EventEmitter {
     }
     let hosts = Client.connectionMap.keys()
     for (let value of hosts) {
-      let host = value
-      let placementInfo = Client.hostServerInfo.get(host).placementInfo
+      let placementInfo = Client.hostServerInfo.get(value).placementInfo
       if (Client.topologyKeySet.has(placementInfo)) {
         return false
       }
@@ -581,12 +638,18 @@ class Client extends EventEmitter {
           .then(async (res) => {
             Client.controlClient = res
             this.getServersInfo()
-              .then((res) => {
-                this.createMetaData(res.rows)
-                return this.nowConnect(callback)
-              })
               .catch((err) => {
                 return this.nowConnect(callback)
+              })
+              .then((res) => {
+                try {
+                  this.createMetaData(res.rows)
+                  return this.nowConnect(callback)
+                } catch (err) {
+                  if (err.message.includes('Bad Topology Key found')) {
+                    throw err
+                  }
+                }
               })
           })
           .catch((err) => {

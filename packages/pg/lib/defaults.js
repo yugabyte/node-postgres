@@ -19,7 +19,7 @@ module.exports = {
   connectionString: undefined,
 
   // database port
-  port: 5432,
+  port: 5433,
 
   // Load Balance feature variable
   loadBalance: false,
