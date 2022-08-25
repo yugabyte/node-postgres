@@ -323,6 +323,34 @@ class Client extends EventEmitter {
     })
   }
 
+  async iterateHostList(client) {
+    let upHostsList = Client.hostServerInfo.keys()
+    let upHost = upHostsList.next()
+    let hostIsUp = false
+    while (upHost !== undefined && !hostIsUp) {
+      client.host = upHost.value
+      client.connectionParameters.host = client.host
+      await client
+        .nowConnect()
+        .then((res) => {
+          hostIsUp = true
+        })
+        .catch((err) => {
+          client.connection =
+            client.config.connection ||
+            new Connection({
+              stream: client.config.stream,
+              ssl: client.connectionParameters.ssl,
+              keepAlive: client.config.keepAlive || false,
+              keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+              encoding: client.connectionParameters.client_encoding || 'utf8',
+            })
+          client._connecting = false
+          upHost = upHostsList.next()
+        })
+    }
+  }
+
   async getConnection() {
     let currConnectionString = this.connectionString
     var client = new Client(currConnectionString)
@@ -338,31 +366,7 @@ class Client extends EventEmitter {
     client.topologyKeys = ''
     client.connectionParameters.topologyKeys = ''
     if (Client.failedHosts.has(client.host)) {
-      let upHostsList = Client.hostServerInfo.keys()
-      let upHost = upHostsList.next()
-      let hostIsUp = false
-      while (upHost !== undefined && !hostIsUp) {
-        client.host = upHost.value
-        client.connectionParameters.host = client.host
-        await client
-          .nowConnect()
-          .then((res) => {
-            hostIsUp = true
-          })
-          .catch((err) => {
-            client.connection =
-              client.config.connection ||
-              new Connection({
-                stream: client.config.stream,
-                ssl: client.connectionParameters.ssl,
-                keepAlive: client.config.keepAlive || false,
-                keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
-                encoding: client.connectionParameters.client_encoding || 'utf8',
-              })
-            client._connecting = false
-            upHost = upHostsList.next()
-          })
-      }
+      await this.iterateHostList(client)
     } else {
       client.connectionParameters.host = client.host
       await client.nowConnect().catch(async (err) => {
@@ -380,31 +384,7 @@ class Client extends EventEmitter {
           // If both resolved
           client.host = addresses[1].address // IPv4
           if (Client.failedHosts.has(client.host)) {
-            let upHostsList = Client.hostServerInfo.keys()
-            let upHost = upHostsList.next()
-            let hostIsUp = false
-            while (upHost !== undefined && !hostIsUp) {
-              client.host = upHost.value
-              client.connectionParameters.host = client.host
-              await client
-                .nowConnect()
-                .then((res) => {
-                  hostIsUp = true
-                })
-                .catch(async (err) => {
-                  client.connection =
-                    client.config.connection ||
-                    new Connection({
-                      stream: client.config.stream,
-                      ssl: client.connectionParameters.ssl,
-                      keepAlive: client.config.keepAlive || false,
-                      keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
-                      encoding: client.connectionParameters.client_encoding || 'utf8',
-                    })
-                  client._connecting = false
-                  upHost = upHostsList.next()
-                })
-            }
+            await this.iterateHostList(client)
           } else {
             client.connectionParameters.host = client.host
             await client.nowConnect()
