@@ -11,17 +11,58 @@ var ConnectionParameters = require('./connection-parameters')
 var Query = require('./query')
 var defaults = require('./defaults')
 var Connection = require('./connection')
+const dns = require('dns')
+const YB_SERVERS_QUERY = 'SELECT * FROM yb_servers()'
+class ServerInfo {
+  constructor(hostName, port, placementInfo, public_ip) {
+    this.hostName = hostName
+    this.port = port
+    this.placementInfo = placementInfo
+    this.public_ip = public_ip
+  }
+}
 
+class Lock {
+  constructor() {
+    this._locked = false
+    this._ee = new EventEmitter().setMaxListeners(0)
+  }
+
+  acquire() {
+    return new Promise((resolve) => {
+      if (!this._locked) {
+        this._locked = true
+        return resolve()
+      }
+      const tryAcquire = () => {
+        if (!this._locked) {
+          this._locked = true
+          this._ee.removeListener('release', tryAcquire)
+          return resolve()
+        }
+      }
+      this._ee.on('release', tryAcquire)
+    })
+  }
+
+  release() {
+    this._locked = false
+    setImmediate(() => this._ee.emit('release'))
+  }
+}
+
+const lock = new Lock()
 class Client extends EventEmitter {
   constructor(config) {
     super()
-
     this.connectionParameters = new ConnectionParameters(config)
     this.user = this.connectionParameters.user
     this.database = this.connectionParameters.database
     this.port = this.connectionParameters.port
     this.host = this.connectionParameters.host
-
+    this.loadBalance = this.connectionParameters.loadBalance
+    this.topologyKeys = this.connectionParameters.topologyKeys
+    this.connectionString = config
     // "hiding" the password so it doesn't show up in stack traces
     // or if the client is console.logged
     Object.defineProperty(this, 'password', {
@@ -57,6 +98,11 @@ class Client extends EventEmitter {
     this.processID = null
     this.secretKey = null
     this.ssl = this.connectionParameters.ssl || false
+    this.config = config
+    // prevHostIfUsePublic will store the private host name before replacing
+    // it with public IP for making the connection
+    this.prevHostIfUsePublic = this.host
+    this.urlHost = this.host
     // As with Password, make SSL->Key (the private key) non-enumerable.
     // It won't show up in stack traces
     // or if the client is console.logged
@@ -68,6 +114,25 @@ class Client extends EventEmitter {
 
     this._connectionTimeoutMillis = c.connectionTimeoutMillis || 0
   }
+  // Control Connection
+  static controlClient = undefined
+  static lastTimeMetaDataFetched = new Date().getTime() / 1000
+  // Map of host -> connectionCount
+  static connectionMap = new Map()
+  // Map of failedHost -> ServerInfo of host
+  static failedHosts = new Map()
+  // Map of placementInfoOfHost -> list of Hosts
+  static placementInfoHostMap = new Map()
+  // Map of Host -> ServerInfo
+  static hostServerInfo = new Map()
+  // Boolean to check if public IP needs to be used or not
+  static usePublic = false
+  // Set of topology Keys provided in URL
+  static topologyKeySet = new Set()
+  // time to refresh the ServerMetaData
+  static REFRESING_TIME = 300 // secs
+  // Boolean to Refresh ServerMetaData manually (for testing purpose).
+  static doHardRefresh = false
 
   _errorAllQueries(err) {
     const enqueueError = (query) => {
@@ -85,11 +150,88 @@ class Client extends EventEmitter {
     this.queryQueue.length = 0
   }
 
+  getLeastLoadedServer(hostsList) {
+    if (hostsList.size === 0) {
+      return this.host
+    }
+    let minConnectionCount = Number.MAX_VALUE
+    let leastLoadedHosts = []
+    let hosts = hostsList.keys()
+    for (let value of hosts) {
+      let host = value
+      if (this.connectionParameters.topologyKeys !== '') {
+        let placementInfoOfHost
+        if (!this.checkConnectionMapEmpty()) {
+          placementInfoOfHost = Client.hostServerInfo.get(host).placementInfo
+        } else {
+          placementInfoOfHost = hostsList.get(host).placementInfo
+        }
+        if (!Client.topologyKeySet.has(placementInfoOfHost)) {
+          continue
+        }
+      }
+      let hostCount
+      if (typeof hostsList.get(host) === 'object') {
+        hostCount = 0
+      } else {
+        hostCount = hostsList.get(host)
+      }
+      if (minConnectionCount > hostCount) {
+        leastLoadedHosts = []
+        minConnectionCount = hostCount
+        leastLoadedHosts.push(host)
+      } else if (minConnectionCount === hostCount) {
+        leastLoadedHosts.push(host)
+      }
+    }
+    if (leastLoadedHosts.length === 0) {
+      return this.host
+    }
+    let randomIdx = Math.floor(Math.random() * leastLoadedHosts.length - 1) + 1
+    let leastLoadedHost = leastLoadedHosts[randomIdx]
+    return leastLoadedHost
+  }
+
+  isValidKey(key) {
+    var keyParts = key.split('.')
+    if (keyParts.length !== 3) {
+      return false
+    }
+    return Client.placementInfoHostMap.has(key)
+  }
+
+  incrementConnectionCount() {
+    let prevCount = 0
+    let host = this.host
+    if (Client.usePublic) {
+      host = this.prevHostIfUsePublic
+    }
+    if (Client.connectionMap.has(host)) {
+      prevCount = Client.connectionMap.get(host)
+    } else if (Client.failedHosts.has(host)) {
+      let serverInfo = Client.failedHosts.get(host)
+      Client.hostServerInfo.set(host, serverInfo)
+      Client.failedHosts.delete(host)
+    }
+    Client.connectionMap.set(host, prevCount + 1)
+  }
+
   _connect(callback) {
     var self = this
+    if (this.connectionParameters.loadBalance && this._connecting) {
+      this.connection =
+        this.config.connection ||
+        new Connection({
+          stream: this.config.stream,
+          ssl: this.connectionParameters.ssl,
+          keepAlive: this.config.keepAlive || false,
+          keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
+          encoding: this.connectionParameters.client_encoding || 'utf8',
+        })
+      this._connecting = false
+    }
     var con = this.connection
     this._connectionCallback = callback
-
     if (this._connecting || this._connected) {
       const err = new Error('Client has already been connected. You cannot reuse a client.')
       process.nextTick(() => {
@@ -106,7 +248,21 @@ class Client extends EventEmitter {
         con.stream.destroy(new Error('timeout expired'))
       }, this._connectionTimeoutMillis)
     }
-
+    if (this.connectionParameters.loadBalance) {
+      if (!this.checkConnectionMapEmpty() && Client.hostServerInfo.size) {
+        this.host = this.getLeastLoadedServer(Client.connectionMap)
+        this.port = Client.hostServerInfo.get(this.host).port
+      } else if (Client.failedHosts.size) {
+        this.host = this.getLeastLoadedServer(Client.failedHosts)
+        this.port = Client.failedHosts.get(this.host).port
+      }
+    }
+    if (Client.usePublic) {
+      let currentHost = this.host
+      let serverInfo = Client.hostServerInfo.get(currentHost)
+      this.prevHostIfUsePublic = currentHost
+      this.host = serverInfo.public_ip
+    }
     if (this.host && this.host.indexOf('/') === 0) {
       con.connect(this.host + '/.s.PGSQL.' + this.port)
     } else {
@@ -156,20 +312,343 @@ class Client extends EventEmitter {
     })
   }
 
-  connect(callback) {
+  attachErrorListenerOnClientConnection(client) {
+    client.on('error', () => {
+      if (Client.hostServerInfo.has(client.host)) {
+        Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
+        Client.connectionMap.delete(client.host)
+        Client.hostServerInfo.delete(client.host)
+      }
+      Client.controlClient = undefined
+    })
+  }
+
+  async iterateHostList(client) {
+    let upHostsList = Client.hostServerInfo.keys()
+    let upHost = upHostsList.next()
+    let hostIsUp = false
+    while (upHost !== undefined && !hostIsUp) {
+      client.host = upHost.value
+      client.connectionParameters.host = client.host
+      await client
+        .nowConnect()
+        .then((res) => {
+          hostIsUp = true
+        })
+        .catch((err) => {
+          client.connection =
+            client.config.connection ||
+            new Connection({
+              stream: client.config.stream,
+              ssl: client.connectionParameters.ssl,
+              keepAlive: client.config.keepAlive || false,
+              keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+              encoding: client.connectionParameters.client_encoding || 'utf8',
+            })
+          client._connecting = false
+          upHost = upHostsList.next()
+        })
+    }
+  }
+
+  async getConnection() {
+    let currConnectionString = this.connectionString
+    var client = new Client(currConnectionString)
+    this.attachErrorListenerOnClientConnection(client)
+    let lookup = util.promisify(dns.lookup)
+    let addresses = [{ address: client.host }]
+    await lookup(client.host, { family: 0, all: true }).then((res) => {
+      addresses = res
+    })
+    client.host = addresses[0].address // If both resolved then - IPv6 else IPv4
+    client.loadBalance = false
+    client.connectionParameters.loadBalance = false
+    client.topologyKeys = ''
+    client.connectionParameters.topologyKeys = ''
+    if (Client.failedHosts.has(client.host)) {
+      await this.iterateHostList(client)
+    } else {
+      client.connectionParameters.host = client.host
+      await client.nowConnect().catch(async (err) => {
+        client.connection =
+          client.config.connection ||
+          new Connection({
+            stream: client.config.stream,
+            ssl: client.connectionParameters.ssl,
+            keepAlive: client.config.keepAlive || false,
+            keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
+            encoding: client.connectionParameters.client_encoding || 'utf8',
+          })
+        client._connecting = false
+        if (addresses.length === 2) {
+          // If both resolved
+          client.host = addresses[1].address // IPv4
+          if (Client.failedHosts.has(client.host)) {
+            await this.iterateHostList(client)
+          } else {
+            client.connectionParameters.host = client.host
+            await client.nowConnect()
+          }
+        }
+      })
+    }
+    return client
+  }
+
+  async getServersInfo() {
+    var client = Client.controlClient
+    var result
+    await client
+      .query(YB_SERVERS_QUERY)
+      .then((res) => {
+        result = res
+      })
+      .catch((err) => {
+        this.getConnection()
+          .then(async (res) => {
+            Client.controlClient = res
+            await this.getServersInfo()
+          })
+          .catch((err) => {
+            return this.nowConnect(callback)
+          })
+      })
+    return result
+  }
+
+  createServersList(data) {
+    Client.hostServerInfo.clear()
+    data.forEach((eachServer) => {
+      var placementInfo = eachServer.cloud + '.' + eachServer.region + '.' + eachServer.zone
+      var server = new ServerInfo(eachServer.host, eachServer.port, placementInfo, eachServer.public_ip)
+      if (Client.placementInfoHostMap.has(placementInfo)) {
+        let currentHosts = Client.placementInfoHostMap.get(placementInfo)
+        currentHosts.push(eachServer.host)
+        Client.placementInfoHostMap.set(placementInfo, currentHosts)
+      } else {
+        Client.placementInfoHostMap.set(placementInfo, [eachServer.host])
+      }
+      Client.hostServerInfo.set(eachServer.host, server)
+      if (eachServer.public_ip === this.host) {
+        Client.usePublic = true
+      }
+    })
+  }
+
+  createConnectionMap(data) {
+    Client.connectionMap.clear()
+    data.forEach((eachServer) => {
+      Client.connectionMap.set(eachServer.host, 0)
+    })
+  }
+
+  createTopologyKeySet() {
+    var seperatedKeys = this.connectionParameters.topologyKeys.split(',')
+    for (let idx = 0; idx < seperatedKeys.length; idx++) {
+      let key = seperatedKeys[idx]
+      if (this.isValidKey(key)) {
+        Client.topologyKeySet.add(key)
+      } else {
+        throw new Error('Bad Topology Key found - ' + key)
+      }
+    }
+  }
+
+  createMetaData(data) {
+    this.createServersList(data)
+    Client.lastTimeMetaDataFetched = new Date().getTime() / 1000
+    this.createConnectionMap(data)
+    if (this.connectionParameters.topologyKeys !== '') {
+      this.createTopologyKeySet()
+    }
+  }
+
+  checkConnectionMapEmpty() {
+    if (this.connectionParameters.topologyKeys === '') {
+      return Client.connectionMap.size === 0
+    }
+    let hosts = Client.connectionMap.keys()
+    for (let value of hosts) {
+      let placementInfo = Client.hostServerInfo.get(value).placementInfo
+      if (Client.topologyKeySet.has(placementInfo)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  nowConnect(callback) {
     if (callback) {
-      this._connect(callback)
-      return
+      if (this.connectionParameters.loadBalance) {
+        this._connect((error) => {
+          if (error) {
+            if (this.connectionParameters.loadBalance) {
+              if (Client.hostServerInfo.has(this.host)) {
+                Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
+                Client.connectionMap.delete(this.host)
+                Client.hostServerInfo.delete(this.host)
+              } else if (Client.failedHosts.has(this.host)) {
+                Client.failedHosts.delete(this.host)
+              }
+              if (this.checkConnectionMapEmpty() && Client.failedHosts.size === 0) {
+                lock.release()
+                // try with url host and mark that connection type as non-loadBalanced
+                this.host = this.urlHost
+                this.connectionParameters.host = this.host
+                this.connectionParameters.loadBalance = false
+                this.connection =
+                  this.config.connection ||
+                  new Connection({
+                    stream: this.config.stream,
+                    ssl: this.connectionParameters.ssl,
+                    keepAlive: this.config.keepAlive || false,
+                    keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
+                    encoding: this.connectionParameters.client_encoding || 'utf8',
+                  })
+                this._connecting = false
+                Client.hostServerInfo.clear()
+                Client.connectionMap.clear()
+                this.connect(callback)
+                return
+              }
+              lock.release()
+              this.connect(callback)
+            } else {
+              callback(error)
+              return
+            }
+          } else {
+            if (this.connectionParameters.loadBalance) {
+              lock.release()
+              this.incrementConnectionCount()
+            }
+            callback()
+          }
+        })
+        return
+      } else {
+        this._connect(callback)
+        return
+      }
     }
 
     return new this._Promise((resolve, reject) => {
       this._connect((error) => {
         if (error) {
-          reject(error)
+          if (this.connectionParameters.loadBalance) {
+            if (Client.hostServerInfo.has(this.host)) {
+              Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
+              Client.connectionMap.delete(this.host)
+              Client.hostServerInfo.delete(this.host)
+            } else if (Client.failedHosts.has(this.host)) {
+              Client.failedHosts.delete(this.host)
+            }
+            if (this.checkConnectionMapEmpty() && Client.failedHosts.size === 0) {
+              lock.release()
+              this.host = this.urlHost
+              this.connectionParameters.host = this.host
+              this.connectionParameters.loadBalance = false
+              this.connection =
+                this.config.connection ||
+                new Connection({
+                  stream: this.config.stream,
+                  ssl: this.connectionParameters.ssl,
+                  keepAlive: this.config.keepAlive || false,
+                  keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
+                  encoding: this.connectionParameters.client_encoding || 'utf8',
+                })
+              this._connecting = false
+              Client.hostServerInfo.clear()
+              Client.connectionMap.clear()
+              this.connect(callback)
+              return
+            }
+            lock.release()
+            this.connect(callback)
+          } else {
+            reject(error)
+          }
         } else {
+          if (this.connectionParameters.loadBalance) {
+            lock.release()
+            this.incrementConnectionCount()
+          }
           resolve()
         }
       })
+    })
+  }
+
+  updateConnectionMapAfterRefresh() {
+    let hostsInfoList = Client.hostServerInfo.keys()
+    for (let value of hostsInfoList) {
+      let eachHost = value
+      if (!Client.connectionMap.has(eachHost)) {
+        Client.connectionMap.set(eachHost, 0)
+      }
+    }
+    let connectionMapHostList = Client.connectionMap.keys()
+    for (let value of connectionMapHostList) {
+      let eachHost = value
+      if (!Client.hostServerInfo.has(eachHost)) {
+        Client.connectionMap.delete(eachHost)
+      }
+    }
+  }
+
+  updateMetaData(data) {
+    this.createServersList(data)
+    Client.lastTimeMetaDataFetched = new Date().getTime() / 1000
+    this.updateConnectionMapAfterRefresh()
+  }
+
+  isRefreshRequired() {
+    let currentTime = new Date().getTime() / 1000
+    let diff = Math.floor(currentTime - Client.lastTimeMetaDataFetched)
+    return diff >= Client.REFRESING_TIME
+  }
+
+  connect(callback) {
+    if (!this.connectionParameters.loadBalance) {
+      return this.nowConnect(callback)
+    }
+    lock.acquire().then(() => {
+      if (Client.controlClient === undefined) {
+        this.getConnection()
+          .then(async (res) => {
+            Client.controlClient = res
+            this.getServersInfo()
+              .catch((err) => {
+                return this.nowConnect(callback)
+              })
+              .then((res) => {
+                try {
+                  this.createMetaData(res.rows)
+                  return this.nowConnect(callback)
+                } catch (err) {
+                  if (err.message.includes('Bad Topology Key found')) {
+                    throw err
+                  }
+                }
+              })
+          })
+          .catch((err) => {
+            return this.nowConnect(callback)
+          })
+      } else {
+        if (this.isRefreshRequired() || Client.doHardRefresh) {
+          this.getServersInfo()
+            .then((res) => {
+              this.updateMetaData(res.rows)
+              return this.nowConnect(callback)
+            })
+            .catch((err) => {
+              return this.nowConnect(callback)
+            })
+        } else {
+          return this.nowConnect(callback)
+        }
+      }
     })
   }
 
@@ -297,6 +776,13 @@ class Client extends EventEmitter {
   _handleErrorWhileConnecting(err) {
     if (this._connectionError) {
       // TODO(bmc): this is swallowing errors - we shouldn't do this
+      if (this.connectionParameters.loadBalance) {
+        if (this._connectionCallback) {
+          return this._connectionCallback(err)
+        }
+        this.emit('error', err)
+        return
+      }
       return
     }
     this._connectionError = true
@@ -604,6 +1090,16 @@ class Client extends EventEmitter {
     } else {
       this.connection.end()
     }
+
+    lock.acquire().then(() => {
+      if (this.connectionParameters.loadBalance) {
+        let prevCount = Client.connectionMap.get(this.host)
+        if (prevCount > 0) {
+          Client.connectionMap.set(this.host, prevCount - 1)
+        }
+        lock.release()
+      }
+    })
 
     if (cb) {
       this.connection.once('end', cb)

@@ -58,7 +58,6 @@ class ConnectionParameters {
 
     this.user = val('user', config)
     this.database = val('database', config)
-
     if (this.database === undefined) {
       this.database = this.user
     }
@@ -94,7 +93,17 @@ class ConnectionParameters {
         enumerable: false,
       })
     }
+    this.loadBalance = val('loadBalance', config)
+    this.topologyKeys = val('topologyKeys', config)
 
+    if (typeof this.loadBalance === 'string') {
+      this.loadBalance = this.loadBalance === 'true'
+    }
+    if (this.topologyKeys !== '') {
+      if (!this.loadBalance) {
+        throw new Error(' You need to enable Load Balance feature to use Topology Aware! ')
+      }
+    }
     this.client_encoding = val('client_encoding', config)
     this.replication = val('replication', config)
     // a domain socket begins with '/'
@@ -132,6 +141,8 @@ class ConnectionParameters {
     add(params, this, 'fallback_application_name')
     add(params, this, 'connect_timeout')
     add(params, this, 'options')
+    add(params, this, 'loadBalance')
+    add(params, this, 'topologyKeys')
 
     var ssl = typeof this.ssl === 'object' ? this.ssl : this.ssl ? { sslmode: this.ssl } : {}
     add(params, ssl, 'sslmode')
