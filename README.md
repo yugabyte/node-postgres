@@ -4,6 +4,8 @@
 <span class="badge-npmversion"><a href="https://npmjs.org/package/pg" title="View this project on NPM"><img src="https://img.shields.io/npm/v/pg.svg" alt="NPM version" /></a></span>
 <span class="badge-npmdownloads"><a href="https://npmjs.org/package/pg" title="View this project on NPM"><img src="https://img.shields.io/npm/dm/pg.svg" alt="NPM downloads" /></a></span>
 
+This is a fork of [node-postgres](https://github.com/brianc/node-postgres) which includes smart feature like Cluster Aware and Topology Aware load balancing. To know more visit the [docs page](https://docs.yugabyte.com/preview/drivers-orms/).
+
 Non-blocking PostgreSQL client for Node.js. Pure JavaScript and optional native libpq bindings.
 
 ## Monorepo

@@ -1,5 +1,5 @@
 {
-  "name": "pg-yugabytedb",
+  "name": "@yugabytedb/pg",
   "version": "8.7.3-yb-1",
   "description": "Pure JavaScript PostgreSQL client and native libpq bindings with YugabyteDB smart-driver features",
   "keywords": [
@@ -56,5 +56,8 @@
   "license": "MIT",
   "engines": {
     "node": ">= 8.0.0"
+  },
+  "publishConfig": {
+   "access": "public"
   }
 }

@@ -5,7 +5,7 @@ A connection pool for node-postgres
 
 ## install
 ```sh
-npm i pg-pool pg
+npm i @yugabytedb/pg-pool @yugabytedb/pg
 ```
 
 ## use
@@ -15,7 +15,7 @@ npm i pg-pool pg
 to use pg-pool you must first create an instance of a pool
 
 ```js
-var Pool = require('pg-pool')
+var Pool = require('@yugabytedb/pg-pool')
 
 // by default the pool uses the same
 // configuration as whatever `pg` version you have installed
@@ -39,7 +39,7 @@ var pool2 = new Pool({
 
 //you can supply a custom client constructor
 //if you want to use the native postgres client
-var NativeClient = require('pg').native.Client
+var NativeClient = require('@yugabytedb/pg').native.Client
 var nativePool = new Pool({ Client: NativeClient })
 
 //you can even pool pg-native clients directly
@@ -51,7 +51,7 @@ var pgNativePool = new Pool({ Client: PgNativeClient })
 The Pool constructor does not support passing a Database URL as the parameter. To use pg-pool on heroku, for example, you need to parse the URL into a config object. Here is an example of how to parse a Database URL.
 
 ```js
-const Pool = require('pg-pool');
+const Pool = require('@yugabytedb/pg-pool');
 const url = require('url')
 
 const params = url.parse(process.env.DATABASE_URL);
