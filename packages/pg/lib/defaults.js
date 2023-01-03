@@ -27,6 +27,9 @@ module.exports = {
   // Topology keys
   topologyKeys: '',
 
+  // Refresh Interval
+  ybServersRefreshInterval: 300,
+
   // number of rows to return at a time from a prepared statement's
   // portal. 0 will return all rows at once
   rows: 0,
