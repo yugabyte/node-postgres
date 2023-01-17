@@ -4,7 +4,70 @@
 <span class="badge-npmversion"><a href="https://npmjs.org/package/pg" title="View this project on NPM"><img src="https://img.shields.io/npm/v/pg.svg" alt="NPM version" /></a></span>
 <span class="badge-npmdownloads"><a href="https://npmjs.org/package/pg" title="View this project on NPM"><img src="https://img.shields.io/npm/dm/pg.svg" alt="NPM downloads" /></a></span>
 
-This is a fork of [node-postgres](https://github.com/brianc/node-postgres) which includes smart feature like Cluster Aware and Topology Aware load balancing. To know more visit the [docs page](https://docs.yugabyte.com/preview/drivers-orms/).
+This is a fork of [node-postgres](https://github.com/brianc/node-postgres) which includes the following additional features:
+
+# Connection load balancing
+
+Users can use this feature in two configurations.
+
+### Cluster-aware / Uniform connection load balancing
+
+In the cluster-aware connection load balancing, connections are distributed across all the tservers in the cluster, irrespective of their placements.
+
+To enable the cluster-aware connection load balancing, provide the parameter `loadBalance` set to true as `loadBalance=true` in the connection url or the connection string (DSN style).
+
+```
+"postgresql://username:password@localhost:5433/database_name?loadBalance=true"
+```
+
+With this parameter specified in the url, the driver will fetch and maintain the list of tservers from the given endpoint (`localhost` in above example) available in the YugabyteDB cluster and distribute the connections equally across them.
+
+This list is refreshed every 5 minutes, when a new connection request is received.
+
+Application needs to use the same connection url to create every connection it needs, so that the distribution happens equally.
+
+### Topology-aware connection load balancing
+
+With topology-aware connnection load balancing, users can target tservers in specific zones by specifying these zones as `topologyKeys` with values in the format `cloudname.regionname.zonename`. Multiple zones can be specified as comma separated values.
+
+The connections will be distributed equally with the tservers in these zones.
+
+Note that, you would still need to specify `loadBalance=true` to enable the topology-aware connection load balancing.
+
+```
+"postgresql://username:password@localhost:5433/database_name?loadBalance=true&topologyKeys=cloud1.region1.zone1,cloud1.region1.zone2"
+```
+### Specifying fallback zones
+
+For topology-aware load balancing, you can now specify fallback placements too. This is not applicable for cluster-aware load balancing.
+Each placement value can be suffixed with a colon (`:`) followed by a preference value between 1 and 10.
+A preference value of `:1` means it is a primary placement. A preference value of `:2` means it is the first fallback placement and so on.If no preference value is provided, it is considered to be a primary placement (equivalent to one with preference value `:1`). Example given below.
+
+```
+"postgres://username:password@localhost:5433/database_name?loadBalance=true&topologyKeys=cloud1.region1.zone1:1,cloud1.region1.zone2:2";
+```
+
+You can also use `*` for specifying all the zones in a given region as shown below. This is not allowed for cloud or region values.
+
+```
+"postgres://username:password@localhost:5433/database_name?loadBalance=true&topologyKeys=cloud1.region1.*:1,cloud1.region2.*:2";
+```
+
+The driver attempts connection to servers in the first fallback placement(s) if it does not find any servers available in the primary placement(s), then it attempts to connect to servers in the second fallback placement(s), if specified and so on. At last if no servers specified in topologyKeys are available, then it will attempt to connect to any server in the cluster (load balancing will still be followed for the entire cluster).
+And this repeats for each connection request.
+
+## Specifying Refresh Interval
+
+Users can specify Refresh Time Interval, in seconds. It is the time interval between two attempts to refresh the information about cluster nodes. Default is 300. Valid values are integers between 0 and 600. Value 0 means refresh for each connection request. Any value outside this range is ignored and the default is used.
+
+To specify Refresh Interval, use the parameter `ybServersRefreshInterval` in the connection url or the connection string.
+
+```
+"postgres://username:password@localhost:5433/database_name?ybServersRefreshInterval=X&loadBalance=true&topologyKeys=cloud1.region1.*:1,cloud1.region2.*:2";
+```
+To know more visit the [docs page](https://docs.yugabyte.com/preview/drivers-orms/).
+
+For a working example which demonstrates the configurations of connection load balancing see the [driver-examples](https://github.com/yugabyte/driver-examples/tree/main/go/pgx) repository.
 
 Non-blocking PostgreSQL client for Node.js. Pure JavaScript and optional native libpq bindings.
 

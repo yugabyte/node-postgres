@@ -158,14 +158,14 @@ class Client extends EventEmitter {
       for (let value of hosts) {
         let host = value
         let placementInfoOfHost
-        if(Client.hostServerInfo.has(host)){
+        if (Client.hostServerInfo.has(host)) {
           placementInfoOfHost = Client.hostServerInfo.get(host).placementInfo
-        }else{
+        } else {
           placementInfoOfHost = hostsList.get(host).placementInfo
         }
         var toCheckStar = placementInfoOfHost.split('.')
-        var StarplacementInfoOfHost = toCheckStar[0]+"."+toCheckStar[1]+".*"
-        if (!Client.topologyKeyMap.get(i).includes(placementInfoOfHost) && !Client.topologyKeyMap.get(i).includes(StarplacementInfoOfHost) ) {
+        var starPlacementInfoOfHost = toCheckStar[0]+"."+toCheckStar[1]+".*"
+        if (!Client.topologyKeyMap.get(i).includes(placementInfoOfHost) && !Client.topologyKeyMap.get(i).includes(starPlacementInfoOfHost)) {
           continue
         }
         let hostCount
@@ -215,24 +215,32 @@ class Client extends EventEmitter {
 
   isValidKey(key) {
     var zones = key.split(':')
-    if(zones.length == 0 || zones.length >2){
+    if (zones.length == 0 || zones.length >2) {
       return false
     }
     var keyParts = zones[0].split('.')
     if (keyParts.length !== 3) {
       return false
     }
-    if(zones[1]==undefined){
+    if (zones[1]==undefined) {
       zones[1]='1'
     }
     zones[1]=Number(zones[1])
-    if(zones[1]<1 || zones[1]>10 || isNaN(zones[1]) || !Number.isInteger(zones[1])){
+    if (zones[1]<1 || zones[1]>10 || isNaN(zones[1]) || !Number.isInteger(zones[1])) {
       return false
     }
-    if(keyParts[2]!="*"){
+    if (keyParts[2]!="*") {
       return Client.placementInfoHostMap.has(zones[0])
+    } else {
+      var allPlacementInfo = Client.placementInfoHostMap.keys();
+      for(let placeInfo of allPlacementInfo){
+        var placeInfoParts = placeInfo.split('.')
+        if(keyParts[0]==placeInfoParts[0] && keyParts[1]==placeInfoParts[1]){
+          return true
+        }
+      }
     }
-    return true
+    return false
   }
 
   incrementConnectionCount() {
@@ -483,7 +491,7 @@ class Client extends EventEmitter {
       let key = seperatedKeys[idx]
       if (this.isValidKey(key)) {
         var zones = key.split(':')
-        if(zones[1]==undefined){
+        if (zones[1]==undefined) {
           zones[1]='1'
         }
         zones[1]=parseInt(zones[1])
