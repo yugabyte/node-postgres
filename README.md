@@ -66,9 +66,11 @@ To specify Refresh Interval, use the parameter `ybServersRefreshInterval` in the
 ```
 "postgres://username:password@localhost:5433/database_name?ybServersRefreshInterval=X&loadBalance=true&topologyKeys=cloud1.region1.*:1,cloud1.region2.*:2";
 ```
+Here, X is the value of the refresh interval (seconds) in integer. 
+
 To know more visit the [docs page](https://docs.yugabyte.com/preview/drivers-orms/).
 
-For a working example which demonstrates the configurations of connection load balancing see the [driver-examples](https://github.com/yugabyte/driver-examples/tree/main/go/pgx) repository.
+For a working example which demonstrates the configurations of connection load balancing see the [driver-examples](https://github.com/yugabyte/driver-examples/tree/main/nodejs) repository.
 
 Non-blocking PostgreSQL client for Node.js. Pure JavaScript and optional native libpq bindings.
 
