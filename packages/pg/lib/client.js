@@ -62,6 +62,7 @@ class Client extends EventEmitter {
     this.host = this.connectionParameters.host
     this.loadBalance = this.connectionParameters.loadBalance
     this.topologyKeys = this.connectionParameters.topologyKeys
+    this.ybServersRefreshInterval = this.connectionParameters.ybServersRefreshInterval
     this.connectionString = config
     // "hiding" the password so it doesn't show up in stack traces
     // or if the client is console.logged
@@ -127,12 +128,8 @@ class Client extends EventEmitter {
   static hostServerInfo = new Map()
   // Boolean to check if public IP needs to be used or not
   static usePublic = false
-  // Set of topology Keys provided in URL
-  static topologyKeySet = new Set()
-  // time to refresh the ServerMetaData
-  static REFRESING_TIME = 300 // secs
-  // Boolean to Refresh ServerMetaData manually (for testing purpose).
-  static doHardRefresh = false
+  // Map of topology Keys provided in URL
+  static topologyKeyMap = new Map()
 
   _errorAllQueries(err) {
     const enqueueError = (query) => {
@@ -156,32 +153,56 @@ class Client extends EventEmitter {
     }
     let minConnectionCount = Number.MAX_VALUE
     let leastLoadedHosts = []
-    let hosts = hostsList.keys()
-    for (let value of hosts) {
-      let host = value
-      if (this.connectionParameters.topologyKeys !== '') {
+    for (var i = 1; i <= Client.topologyKeyMap.size; i++) {
+      let hosts = hostsList.keys()
+      for (let value of hosts) {
+        let host = value
         let placementInfoOfHost
-        if (!this.checkConnectionMapEmpty()) {
+        if (Client.hostServerInfo.has(host)) {
           placementInfoOfHost = Client.hostServerInfo.get(host).placementInfo
         } else {
           placementInfoOfHost = hostsList.get(host).placementInfo
         }
-        if (!Client.topologyKeySet.has(placementInfoOfHost)) {
+        var toCheckStar = placementInfoOfHost.split('.')
+        var starPlacementInfoOfHost = toCheckStar[0]+"."+toCheckStar[1]+".*"
+        if (!Client.topologyKeyMap.get(i).includes(placementInfoOfHost) && !Client.topologyKeyMap.get(i).includes(starPlacementInfoOfHost)) {
           continue
         }
+        let hostCount
+        if (typeof hostsList.get(host) === 'object') {
+          hostCount = 0
+        } else {
+          hostCount = hostsList.get(host)
+        }
+        if (minConnectionCount > hostCount) {
+          leastLoadedHosts = []
+          minConnectionCount = hostCount
+          leastLoadedHosts.push(host)
+        } else if (minConnectionCount === hostCount) {
+          leastLoadedHosts.push(host)
+        }
       }
-      let hostCount
-      if (typeof hostsList.get(host) === 'object') {
-        hostCount = 0
-      } else {
-        hostCount = hostsList.get(host)
+      if(leastLoadedHosts.length != 0){
+        break
       }
-      if (minConnectionCount > hostCount) {
-        leastLoadedHosts = []
-        minConnectionCount = hostCount
-        leastLoadedHosts.push(host)
-      } else if (minConnectionCount === hostCount) {
-        leastLoadedHosts.push(host)
+    }
+
+    if (leastLoadedHosts.length === 0) {
+      let hosts = hostsList.keys()
+      for (let value of hosts) {
+        let hostCount
+        if (typeof hostsList.get(value) === 'object') {
+          hostCount = 0
+        } else {
+          hostCount = hostsList.get(value)
+        }
+        if (minConnectionCount > hostCount) {
+          leastLoadedHosts = []
+          minConnectionCount = hostCount
+          leastLoadedHosts.push(value)
+        } else if (minConnectionCount === hostCount) {
+          leastLoadedHosts.push(value)
+        }
       }
     }
     if (leastLoadedHosts.length === 0) {
@@ -193,11 +214,33 @@ class Client extends EventEmitter {
   }
 
   isValidKey(key) {
-    var keyParts = key.split('.')
+    var zones = key.split(':')
+    if (zones.length == 0 || zones.length >2) {
+      return false
+    }
+    var keyParts = zones[0].split('.')
     if (keyParts.length !== 3) {
       return false
     }
-    return Client.placementInfoHostMap.has(key)
+    if (zones[1]==undefined) {
+      zones[1]='1'
+    }
+    zones[1]=Number(zones[1])
+    if (zones[1]<1 || zones[1]>10 || isNaN(zones[1]) || !Number.isInteger(zones[1])) {
+      return false
+    }
+    if (keyParts[2]!="*") {
+      return Client.placementInfoHostMap.has(zones[0])
+    } else {
+      var allPlacementInfo = Client.placementInfoHostMap.keys();
+      for(let placeInfo of allPlacementInfo){
+        var placeInfoParts = placeInfo.split('.')
+        if(keyParts[0]==placeInfoParts[0] && keyParts[1]==placeInfoParts[1]){
+          return true
+        }
+      }
+    }
+    return false
   }
 
   incrementConnectionCount() {
@@ -249,7 +292,7 @@ class Client extends EventEmitter {
       }, this._connectionTimeoutMillis)
     }
     if (this.connectionParameters.loadBalance) {
-      if (!this.checkConnectionMapEmpty() && Client.hostServerInfo.size) {
+      if (Client.connectionMap.size && Client.hostServerInfo.size) {
         this.host = this.getLeastLoadedServer(Client.connectionMap)
         this.port = Client.hostServerInfo.get(this.host).port
       } else if (Client.failedHosts.size) {
@@ -442,12 +485,23 @@ class Client extends EventEmitter {
     })
   }
 
-  createTopologyKeySet() {
+  createTopologyKeyMap() {
     var seperatedKeys = this.connectionParameters.topologyKeys.split(',')
     for (let idx = 0; idx < seperatedKeys.length; idx++) {
       let key = seperatedKeys[idx]
       if (this.isValidKey(key)) {
-        Client.topologyKeySet.add(key)
+        var zones = key.split(':')
+        if (zones[1]==undefined) {
+          zones[1]='1'
+        }
+        zones[1]=parseInt(zones[1])
+        if (Client.topologyKeyMap.has(zones[1])) {
+          let currentzones = Client.topologyKeyMap.get(zones[1])
+          currentzones.push(zones[0])
+          Client.topologyKeyMap.set(zones[1],currentzones)
+        } else {
+          Client.topologyKeyMap.set(zones[1],[zones[0]])
+        }
       } else {
         throw new Error('Bad Topology Key found - ' + key)
       }
@@ -459,22 +513,8 @@ class Client extends EventEmitter {
     Client.lastTimeMetaDataFetched = new Date().getTime() / 1000
     this.createConnectionMap(data)
     if (this.connectionParameters.topologyKeys !== '') {
-      this.createTopologyKeySet()
+      this.createTopologyKeyMap()
     }
-  }
-
-  checkConnectionMapEmpty() {
-    if (this.connectionParameters.topologyKeys === '') {
-      return Client.connectionMap.size === 0
-    }
-    let hosts = Client.connectionMap.keys()
-    for (let value of hosts) {
-      let placementInfo = Client.hostServerInfo.get(value).placementInfo
-      if (Client.topologyKeySet.has(placementInfo)) {
-        return false
-      }
-    }
-    return true
   }
 
   nowConnect(callback) {
@@ -489,27 +529,6 @@ class Client extends EventEmitter {
                 Client.hostServerInfo.delete(this.host)
               } else if (Client.failedHosts.has(this.host)) {
                 Client.failedHosts.delete(this.host)
-              }
-              if (this.checkConnectionMapEmpty() && Client.failedHosts.size === 0) {
-                lock.release()
-                // try with url host and mark that connection type as non-loadBalanced
-                this.host = this.urlHost
-                this.connectionParameters.host = this.host
-                this.connectionParameters.loadBalance = false
-                this.connection =
-                  this.config.connection ||
-                  new Connection({
-                    stream: this.config.stream,
-                    ssl: this.connectionParameters.ssl,
-                    keepAlive: this.config.keepAlive || false,
-                    keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
-                    encoding: this.connectionParameters.client_encoding || 'utf8',
-                  })
-                this._connecting = false
-                Client.hostServerInfo.clear()
-                Client.connectionMap.clear()
-                this.connect(callback)
-                return
               }
               lock.release()
               this.connect(callback)
@@ -542,26 +561,6 @@ class Client extends EventEmitter {
               Client.hostServerInfo.delete(this.host)
             } else if (Client.failedHosts.has(this.host)) {
               Client.failedHosts.delete(this.host)
-            }
-            if (this.checkConnectionMapEmpty() && Client.failedHosts.size === 0) {
-              lock.release()
-              this.host = this.urlHost
-              this.connectionParameters.host = this.host
-              this.connectionParameters.loadBalance = false
-              this.connection =
-                this.config.connection ||
-                new Connection({
-                  stream: this.config.stream,
-                  ssl: this.connectionParameters.ssl,
-                  keepAlive: this.config.keepAlive || false,
-                  keepAliveInitialDelayMillis: this.config.keepAliveInitialDelayMillis || 0,
-                  encoding: this.connectionParameters.client_encoding || 'utf8',
-                })
-              this._connecting = false
-              Client.hostServerInfo.clear()
-              Client.connectionMap.clear()
-              this.connect(callback)
-              return
             }
             lock.release()
             this.connect(callback)
@@ -605,7 +604,7 @@ class Client extends EventEmitter {
   isRefreshRequired() {
     let currentTime = new Date().getTime() / 1000
     let diff = Math.floor(currentTime - Client.lastTimeMetaDataFetched)
-    return diff >= Client.REFRESING_TIME
+    return diff >= this.connectionParameters.ybServersRefreshInterval
   }
 
   connect(callback) {
@@ -636,7 +635,7 @@ class Client extends EventEmitter {
             return this.nowConnect(callback)
           })
       } else {
-        if (this.isRefreshRequired() || Client.doHardRefresh) {
+        if (this.isRefreshRequired()) {
           this.getServersInfo()
             .then((res) => {
               this.updateMetaData(res.rows)
