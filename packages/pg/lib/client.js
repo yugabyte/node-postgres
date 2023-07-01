@@ -13,6 +13,8 @@ var defaults = require('./defaults')
 var Connection = require('./connection')
 const dns = require('dns')
 const YB_SERVERS_QUERY = 'SELECT * FROM yb_servers()'
+const DEFAULT_FAILED_HOST_TTL_SECONDS = 5
+
 class ServerInfo {
   constructor(hostName, port, placementInfo, public_ip) {
     this.hostName = hostName
@@ -122,6 +124,8 @@ class Client extends EventEmitter {
   static connectionMap = new Map()
   // Map of failedHost -> ServerInfo of host
   static failedHosts = new Map()
+  // Map of failedHost -> Time at which host was added to failedHosts Map
+  static failedHostsTime = new Map()
   // Map of placementInfoOfHost -> list of Hosts
   static placementInfoHostMap = new Map()
   // Map of Host -> ServerInfo
@@ -255,6 +259,7 @@ class Client extends EventEmitter {
       let serverInfo = Client.failedHosts.get(host)
       Client.hostServerInfo.set(host, serverInfo)
       Client.failedHosts.delete(host)
+      Client.failedHostsTime.delete(host)
     }
     Client.connectionMap.set(host, prevCount + 1)
   }
@@ -359,6 +364,8 @@ class Client extends EventEmitter {
     client.on('error', () => {
       if (Client.hostServerInfo.has(client.host)) {
         Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
+        let start = new Date().getTime();
+        Client.failedHostsTime.set(client.host, start)
         Client.connectionMap.delete(client.host)
         Client.hostServerInfo.delete(client.host)
       }
@@ -479,9 +486,22 @@ class Client extends EventEmitter {
   }
 
   createConnectionMap(data) {
-    Client.connectionMap.clear()
+    let currConnectionMap = Client.connectionMap
     data.forEach((eachServer) => {
-      Client.connectionMap.set(eachServer.host, 0)
+      if(!Client.failedHosts.has(eachServer.host)){
+        if(currConnectionMap.has(eachServer.host)){
+          Client.connectionMap.set(eachServer.host, currConnectionMap.get(eachServer.host))
+        } else {
+          Client.connectionMap.set(eachServer.host, 0)
+        }
+      } else {
+        let start = new Date().getTime();
+        if(start - Client.failedHostsTime.get(eachServer.host) > (DEFAULT_FAILED_HOST_TTL_SECONDS * 1000)){
+          Client.connectionMap.set(eachServer.host, 0)
+          Client.failedHosts.delete(eachServer.host)
+          Client.failedHostsTime.delete(eachServer.host)
+        }
+      }
     })
   }
 
@@ -525,10 +545,13 @@ class Client extends EventEmitter {
             if (this.connectionParameters.loadBalance) {
               if (Client.hostServerInfo.has(this.host)) {
                 Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
+                let start = new Date().getTime();
+                Client.failedHostsTime.set(this.host, start)
                 Client.connectionMap.delete(this.host)
                 Client.hostServerInfo.delete(this.host)
               } else if (Client.failedHosts.has(this.host)) {
                 Client.failedHosts.delete(this.host)
+                Client.failedHostsTime.delete(this.host)
               }
               lock.release()
               this.connect(callback)
@@ -557,10 +580,13 @@ class Client extends EventEmitter {
           if (this.connectionParameters.loadBalance) {
             if (Client.hostServerInfo.has(this.host)) {
               Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
+              let start = new Date().getTime();
+              Client.failedHostsTime.set(this.host, start)
               Client.connectionMap.delete(this.host)
               Client.hostServerInfo.delete(this.host)
             } else if (Client.failedHosts.has(this.host)) {
               Client.failedHosts.delete(this.host)
+              Client.failedHostsTime.delete(this.host)
             }
             lock.release()
             this.connect(callback)
@@ -583,7 +609,16 @@ class Client extends EventEmitter {
     for (let value of hostsInfoList) {
       let eachHost = value
       if (!Client.connectionMap.has(eachHost)) {
-        Client.connectionMap.set(eachHost, 0)
+        if(!Client.failedHosts.has(eachHost)){
+          Client.connectionMap.set(eachHost, 0)
+        } else {
+          let start = new Date().getTime();
+          if(start - Client.failedHostsTime.get(eachHost) > (DEFAULT_FAILED_HOST_TTL_SECONDS * 1000)){
+            Client.connectionMap.set(eachHost, 0)
+            Client.failedHosts.delete(eachHost)
+            Client.failedHostsTime.delete(eachHost)
+          }
+        }
       }
     }
     let connectionMapHostList = Client.connectionMap.keys()
