@@ -36,7 +36,6 @@
     "singleQuote": true
   },
   "dependencies": {
-    "winston": "^3.14.2",
-    "yarn": "^1.22.22"
+    "winston": "^3.14.2"
   }
 }
