@@ -248,7 +248,7 @@ class Client extends EventEmitter {
         }
       }
     }
-    logger.warn("Given key " + key + "is invalid")
+    logger.warn("Given topology-key " + key + " is invalid")
     return false
   }
 
@@ -268,7 +268,7 @@ class Client extends EventEmitter {
       Client.failedHostsTime.delete(host)
     }
     Client.connectionMap.set(host, prevCount + 1)
-    logger.info("Increasing connection count of " + host + "by 1")
+    logger.debug("Increasing connection count of " + host + " by 1")
   }
 
   _connect(callback) {
@@ -500,8 +500,7 @@ class Client extends EventEmitter {
       if (eachServer.public_ip === this.host) {
         Client.usePublic = true
       }
-      logger.debug("Updated hostServerInfo " + [...Client.hostServerInfo])
-      logger.debug("Use Public Ips set to " + Client.usePublic)
+      logger.debug("Updated hostServerInfo to " + [...Client.hostServerInfo] + " and usePublic to " + Client.usePublic)
     })
   }
 
@@ -1168,7 +1167,7 @@ class Client extends EventEmitter {
       if (this.connectionParameters.loadBalance) {
         let prevCount = Client.connectionMap.get(this.host)
         if (prevCount > 0) {
-          logger.debug("Decreasing connection count of " + this.host + " by 1")
+          logger.debug("Decreasing connection count (" + prevCount + ") of " + this.host + " by 1")
           Client.connectionMap.set(this.host, prevCount - 1)
         }
         lock.release()
