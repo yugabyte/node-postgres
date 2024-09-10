@@ -309,10 +309,6 @@ class Client extends EventEmitter {
         this.host = this.getLeastLoadedServer(Client.connectionMap)
         this.port = Client.hostServerInfo.get(this.host).port
         logger.silly("Least loaded host received " + this.host + " port " + this.port)
-      } else if (Client.failedHosts.size) {
-        this.host = this.getLeastLoadedServer(Client.failedHosts)
-        this.port = Client.failedHosts.get(this.host).port
-        logger.silly("Least loaded host received " + this.host + " port " + this.port)
       }
     }
     if (Client.usePublic) {
@@ -389,7 +385,7 @@ class Client extends EventEmitter {
     let upHostsList = Client.hostServerInfo.keys()
     let upHost = upHostsList.next()
     let hostIsUp = false
-    while (upHost !== undefined && !hostIsUp) {
+    while (upHost.value !== undefined && !hostIsUp && !Client.failedHosts.has(upHost.value)) {
       client.host = upHost.value
       client.connectionParameters.host = client.host
       logger.debug("Trying to create control connection to " + client.host)
@@ -408,9 +404,19 @@ class Client extends EventEmitter {
               keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
               encoding: client.connectionParameters.client_encoding || 'utf8',
             })
+            logger.debug("Not able to create control connection to host " + client.host + " adding it to failedHosts")
+            Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
+            let start = new Date().getTime();
+            Client.failedHostsTime.set(client.host, start)
+            Client.connectionMap.delete(client.host)
+            Client.hostServerInfo.delete(client.host)
           client._connecting = false
           upHost = upHostsList.next()
         })
+    }
+    if(!hostIsUp) {
+      logger.debug("Not able to create control connection to any host in the cluster")
+      throw new Error('Not able to create control connection to any host in the cluster')
     }
   }
 
@@ -577,9 +583,6 @@ class Client extends EventEmitter {
                 Client.failedHostsTime.set(this.host, start)
                 Client.connectionMap.delete(this.host)
                 Client.hostServerInfo.delete(this.host)
-              } else if (Client.failedHosts.has(this.host)) {
-                Client.failedHosts.delete(this.host)
-                Client.failedHostsTime.delete(this.host)
               }
               lock.release()
               this.connect(callback)
@@ -605,7 +608,7 @@ class Client extends EventEmitter {
     return new this._Promise((resolve, reject) => {
       this._connect((error) => {
         if (error) {
-          if (this.connectionParameters.loadBalance) {
+          if (this.connectionParameters.loadBalance && Client.hostServerInfo.size !== 0) {
             if (Client.hostServerInfo.has(this.host)) {
               logger.debug("Adding " + this.host + " to failed host list")
               Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
@@ -613,9 +616,6 @@ class Client extends EventEmitter {
               Client.failedHostsTime.set(this.host, start)
               Client.connectionMap.delete(this.host)
               Client.hostServerInfo.delete(this.host)
-            } else if (Client.failedHosts.has(this.host)) {
-              Client.failedHosts.delete(this.host)
-              Client.failedHostsTime.delete(this.host)
             }
             lock.release()
             this.connect(callback)
@@ -848,7 +848,7 @@ class Client extends EventEmitter {
   _handleErrorWhileConnecting(err) {
     if (this._connectionError) {
       // TODO(bmc): this is swallowing errors - we shouldn't do this
-      if (this.connectionParameters.loadBalance) {
+      if (this.connectionParameters.loadBalance || Client.controlClient === undefined) {
         if (this._connectionCallback) {
           return this._connectionCallback(err)
         }

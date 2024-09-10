@@ -1,6 +1,6 @@
 {
   "name": "@yugabytedb/pg",
-  "version": "8.7.3-yb-4",
+  "version": "8.7.3-yb-5",
   "description": "Pure JavaScript PostgreSQL client and native libpq bindings with YugabyteDB smart-driver features",
   "keywords": [
     "database",
