@@ -154,7 +154,7 @@ class Client extends EventEmitter {
   }
 
   getLeastLoadedServer(hostsList) {
-    logger.silly("getLeaseLoadedServer() is called")
+    logger.silly("getLeastLoadedServer() is called")
     if (hostsList.size === 0) {
       return this.host
     }
@@ -217,7 +217,7 @@ class Client extends EventEmitter {
     let randomIdx = Math.floor(Math.random() * leastLoadedHosts.length - 1) + 1
     let leastLoadedHost = leastLoadedHosts[randomIdx]
     logger.silly("Least loaded servers are " + leastLoadedHosts)
-    logger.debug("Returning " + leastLoadedHost + "as the least loaded host")
+    logger.debug("Returning " + leastLoadedHost + " as the least loaded host")
     return leastLoadedHost
   }
 
@@ -439,6 +439,7 @@ class Client extends EventEmitter {
       await this.iterateHostList(client)
     } else {
       client.connectionParameters.host = client.host
+      logger.debug("Attempting to create control connection to " + client.host)
       await client.nowConnect().catch(async (err) => {
         client.connection =
           client.config.connection ||
@@ -450,6 +451,7 @@ class Client extends EventEmitter {
             encoding: client.connectionParameters.client_encoding || 'utf8',
           })
         client._connecting = false
+        logger.silly("Got error: " + err.message + " when attempting to connect to " + client.host)
         if (addresses.length === 2) {
           // If both resolved
           client.host = addresses[1].address // IPv4
@@ -457,6 +459,7 @@ class Client extends EventEmitter {
             await this.iterateHostList(client)
           } else {
             client.connectionParameters.host = client.host
+            logger.silly("Attempting to create control connection to " + client.host)
             await client.nowConnect()
           }
         }
@@ -491,6 +494,7 @@ class Client extends EventEmitter {
   createServersList(data) {
     logger.silly("Creating servers list")
     Client.hostServerInfo.clear()
+    Client.placementInfoHostMap.clear()
     data.forEach((eachServer) => {
       var placementInfo = eachServer.cloud + '.' + eachServer.region + '.' + eachServer.zone
       var server = new ServerInfo(eachServer.host, eachServer.port, placementInfo, eachServer.public_ip)
@@ -501,13 +505,13 @@ class Client extends EventEmitter {
       } else {
         Client.placementInfoHostMap.set(placementInfo, [eachServer.host])
       }
-      logger.debug("Updated placementInfoHost Map " + [...Client.placementInfoHostMap])
       Client.hostServerInfo.set(eachServer.host, server)
       if (eachServer.public_ip === this.host) {
         Client.usePublic = true
       }
-      logger.debug("Updated hostServerInfo to " + [...Client.hostServerInfo] + " and usePublic to " + Client.usePublic)
     })
+    logger.debug("Updated placementInfoHost Map " + [...Client.placementInfoHostMap])
+    logger.debug("Updated hostServerInfo to " + [...Client.hostServerInfo] + " and usePublic to " + Client.usePublic)
   }
 
   createConnectionMap(data) {
@@ -608,6 +612,7 @@ class Client extends EventEmitter {
     return new this._Promise((resolve, reject) => {
       this._connect((error) => {
         if (error) {
+          logger.silly("Not able to connect to " + this.host + " due to error " + error.message)
           if (this.connectionParameters.loadBalance && Client.hostServerInfo.size !== 0) {
             if (Client.hostServerInfo.has(this.host)) {
               logger.debug("Adding " + this.host + " to failed host list")
@@ -682,6 +687,7 @@ class Client extends EventEmitter {
 
   connect(callback) {
     if (!this.connectionParameters.loadBalance) {
+      logger.silly("Loadbalance is false, falling to upstream behaviour")
       return this.nowConnect(callback)
     }
     lock.acquire().then(() => {
@@ -691,6 +697,7 @@ class Client extends EventEmitter {
             Client.controlClient = res
             this.getServersInfo()
               .catch((err) => {
+                logger.silly("Not able to get servers info due to error " + err.message)
                 return this.nowConnect(callback)
               })
               .then((res) => {
@@ -705,6 +712,7 @@ class Client extends EventEmitter {
               })
           })
           .catch((err) => {
+            logger.silly("Not able to create control connection to any node due to error " + err.message)
             return this.nowConnect(callback)
           })
       } else {
@@ -715,6 +723,7 @@ class Client extends EventEmitter {
               return this.nowConnect(callback)
             })
             .catch((err) => {
+              logger.silly("Not able to get servers info, error " + err.message)
               return this.nowConnect(callback)
             })
         } else {
