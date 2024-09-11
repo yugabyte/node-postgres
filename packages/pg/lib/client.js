@@ -224,10 +224,12 @@ class Client extends EventEmitter {
   isValidKey(key) {
     var zones = key.split(':')
     if (zones.length == 0 || zones.length >2) {
+      logger.warn("Given topology-key " + key + " is invalid")
       return false
     }
     var keyParts = zones[0].split('.')
     if (keyParts.length !== 3) {
+      logger.warn("Given topology-key " + key + " is invalid")
       return false
     }
     if (zones[1]==undefined) {
@@ -235,21 +237,11 @@ class Client extends EventEmitter {
     }
     zones[1]=Number(zones[1])
     if (zones[1]<1 || zones[1]>10 || isNaN(zones[1]) || !Number.isInteger(zones[1])) {
+      logger.warn("Given topology-key " + key + " is invalid")
       return false
     }
-    if (keyParts[2]!="*") {
-      return Client.placementInfoHostMap.has(zones[0])
-    } else {
-      var allPlacementInfo = Client.placementInfoHostMap.keys();
-      for(let placeInfo of allPlacementInfo){
-        var placeInfoParts = placeInfo.split('.')
-        if(keyParts[0]==placeInfoParts[0] && keyParts[1]==placeInfoParts[1]){
-          return true
-        }
-      }
-    }
-    logger.warn("Given topology-key " + key + " is invalid")
-    return false
+    logger.silly("Given topology-key " + key + " is valid")
+    return true
   }
 
   incrementConnectionCount() {
