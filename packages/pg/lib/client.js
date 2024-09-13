@@ -301,6 +301,10 @@ class Client extends EventEmitter {
         this.host = this.getLeastLoadedServer(Client.connectionMap)
         this.port = Client.hostServerInfo.get(this.host).port
         logger.silly("Least loaded host received " + this.host + " port " + this.port)
+      } else if (Client.failedHosts.size) {
+        this.host = this.getLeastLoadedServer(Client.failedHosts)
+        this.port = Client.failedHosts.get(this.host).port
+        logger.silly("Least loaded host from failed host list received " + this.host + " port " + this.port)
       }
     }
     if (Client.usePublic) {
@@ -443,7 +447,7 @@ class Client extends EventEmitter {
             encoding: client.connectionParameters.client_encoding || 'utf8',
           })
         client._connecting = false
-        logger.silly("Got error: " + err.message + " when attempting to connect to " + client.host)
+        logger.silly("Got error: " + err.message + " when attempting to create control connection to " + client.host)
         if (addresses.length === 2) {
           // If both resolved
           client.host = addresses[1].address // IPv4
@@ -568,6 +572,7 @@ class Client extends EventEmitter {
   nowConnect(callback) {
     logger.silly("nowConnect() is called...")
     if (callback) {
+      logger.silly("callback is not null")
       if (this.connectionParameters.loadBalance) {
         this._connect((error) => {
           if (error) {
@@ -579,6 +584,10 @@ class Client extends EventEmitter {
                 Client.failedHostsTime.set(this.host, start)
                 Client.connectionMap.delete(this.host)
                 Client.hostServerInfo.delete(this.host)
+              } else if (Client.failedHosts.has(this.host)) {
+                logger.silly("Removing host " + this.host + " from failed hosts")
+                Client.failedHosts.delete(this.host)
+                Client.failedHostsTime.delete(this.host)
               }
               lock.release()
               this.connect(callback)
@@ -613,6 +622,10 @@ class Client extends EventEmitter {
               Client.failedHostsTime.set(this.host, start)
               Client.connectionMap.delete(this.host)
               Client.hostServerInfo.delete(this.host)
+            } else if (Client.failedHosts.has(this.host)) {
+              logger.silly("Removing host " + this.host + " from failed host list")
+              Client.failedHosts.delete(this.host)
+              Client.failedHostsTime.delete(this.host)
             }
             lock.release()
             this.connect(callback)
@@ -640,7 +653,7 @@ class Client extends EventEmitter {
         } else {
           let start = new Date().getTime();
           if (start - Client.failedHostsTime.get(eachHost) > (DEFAULT_FAILED_HOST_TTL_SECONDS * 1000)) {
-            logger.debug("Removing" + eachHost + " from failed host list")
+            logger.debug("Removing " + eachHost + " from failed host list")
             Client.connectionMap.set(eachHost, 0)
             Client.failedHosts.delete(eachHost)
             Client.failedHostsTime.delete(eachHost)
