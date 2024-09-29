@@ -378,10 +378,17 @@ class Client extends EventEmitter {
   }
 
   async iterateHostList(client) {
+    logger.silly([...Client.hostServerInfo])
+    logger.silly([...Client.failedHosts])
     let upHostsList = Client.hostServerInfo.keys()
     let upHost = upHostsList.next()
     let hostIsUp = false
-    while (upHost.value !== undefined && !hostIsUp && !Client.failedHosts.has(upHost.value)) {
+    while (upHost.value !== undefined && !hostIsUp) {
+      if (Client.failedHosts.has(upHost.value)) {
+        logger.silly(upHost.value + " is present in failed host list, trying next host")
+        upHost = upHostsList.next()
+        continue
+      }
       client.host = upHost.value
       client.connectionParameters.host = client.host
       logger.debug("Trying to create control connection to " + client.host)
