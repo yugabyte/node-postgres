@@ -426,7 +426,10 @@ class Client extends EventEmitter {
   async getConnection() {
     logger.silly("Creating control connection...")
     let currConnectionString = this.connectionString
-    var client = new Client(currConnectionString)
+    var client = new Client({
+      connectionString: currConnectionString,
+      connectionTimeoutMillis: 10000,
+    });
     this.attachErrorListenerOnClientConnection(client)
     let lookup = util.promisify(dns.lookup)
     let addresses = [{ address: client.host }]
@@ -477,7 +480,10 @@ class Client extends EventEmitter {
     var client = Client.controlClient
     var result
     await client
-      .query(YB_SERVERS_QUERY)
+      .query({
+        text: YB_SERVERS_QUERY,
+        statement_timeout: 10000, 
+      })
       .then((res) => {
         result = res
       })
