@@ -488,6 +488,14 @@ class Client extends EventEmitter {
         result = res
       })
       .catch((err) => {
+        // Check if the error is related to the statement timeout
+        if (err.code === '57014' || err.message.includes('timeout')) { 
+        // This means the query exceeded the statement timeout
+          logger.error("Query timed out after 10 seconds!");
+        } else {
+          // Handle other types of errors
+          logger.error("Query failed with error: ", err);
+        }
         this.getConnection()
           .then(async (res) => {
             Client.controlClient = res
