@@ -720,7 +720,9 @@ class Client extends EventEmitter {
       logger.silly("Loadbalance is false, falling to upstream behaviour")
       return this.nowConnect(callback)
     }
+    logger.silly("waiting to acquire lock")
     lock.acquire().then(() => {
+      logger.silly("lock acquired")
       if (Client.controlClient === undefined) {
         this.getConnection()
           .then(async (res) => {
