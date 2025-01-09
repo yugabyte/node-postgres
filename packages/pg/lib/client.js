@@ -380,6 +380,9 @@ class Client extends EventEmitter {
   async iterateHostList(client) {
     logger.silly([...Client.hostServerInfo])
     logger.silly([...Client.failedHosts])
+    const sortedMap = new Map([...Client.hostServerInfo].sort(([keyA], [keyB]) => keyA.localeCompare(keyB)));
+    Client.hostServerInfo = sortedMap
+    logger.silly([...Client.hostServerInfo])
     let upHostsList = Client.hostServerInfo.keys()
     let upHost = upHostsList.next()
     let hostIsUp = false
