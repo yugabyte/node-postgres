@@ -373,6 +373,7 @@ class Client extends EventEmitter {
         Client.connectionMap.delete(client.host)
         Client.hostServerInfo.delete(client.host)
       }
+      logger.silly("setting controlClient to undefined")
       Client.controlClient = undefined
     })
   }
@@ -481,25 +482,25 @@ class Client extends EventEmitter {
   async getServersInfo() {
     logger.silly("Refreshing server info")
     var client = Client.controlClient
+    if (!client) {
+      logger.silly("Client.controlClient is not initialized!");
+    }
     var result
-    await client
-      .query({
+    logger.silly(`Running query: ${YB_SERVERS_QUERY}`);
+    try {
+      result = await client.query({
         text: YB_SERVERS_QUERY,
-        statement_timeout: 10000, 
-      })
-      .then((res) => {
-        result = res
-      })
-      .catch((err) => {
-        // Check if the error is related to the statement timeout
-        if (err.code === '57014' || err.message.includes('timeout')) { 
-        // This means the query exceeded the statement timeout
+        statement_timeout: 10000, // Timeout after 10 seconds
+      });
+    } catch (err) {
+      logger.silly("Error occurred:", err);
+      if (err.code === '57014' || err.message.includes('timeout')) {
           logger.error("Query timed out after 10 seconds!");
-        } else {
-          // Handle other types of errors
+      } else {
           logger.error("Query failed with error: ", err);
-        }
-        this.getConnection()
+      }
+      logger.silly("in catch ");
+      this.getConnection()
           .then(async (res) => {
             Client.controlClient = res
             await this.getServersInfo()
@@ -507,7 +508,7 @@ class Client extends EventEmitter {
           .catch((err) => {
             return this.nowConnect(callback)
           })
-      })
+    }
     return result
   }
 
