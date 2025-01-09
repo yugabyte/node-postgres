@@ -336,7 +336,7 @@ class Client extends EventEmitter {
     this._attachListeners(con)
 
     con.once('end', () => {
-      const error = this._ending ? new Error('Connection terminated') : new Error('Connection terminated unexpectedly')
+      const error = this._ending ? new Error('Connection terminated') : new Error('Connection terminated unexpectedly check')
 
       clearTimeout(this.connectionTimeoutHandle)
       this._errorAllQueries(error)
@@ -347,12 +347,16 @@ class Client extends EventEmitter {
         // treat this as an error unless we've already emitted an error
         // during connection.
         if (this._connecting && !this._connectionError) {
+          logger.silly("line 350")
           if (this._connectionCallback) {
+            logger.silly("line 352")
             this._connectionCallback(error)
           } else {
+            logger.silly("line 355")
             this._handleErrorEvent(error)
           }
         } else if (!this._connectionError) {
+          logger.silly("line 359")
           this._handleErrorEvent(error)
         }
       }
@@ -887,12 +891,16 @@ class Client extends EventEmitter {
   // if we receieve an error event or error message
   // during the connection process we handle it here
   _handleErrorWhileConnecting(err) {
+    logger.silly("894")
     if (this._connectionError) {
+      logger.silly("896")
       // TODO(bmc): this is swallowing errors - we shouldn't do this
       if (this.connectionParameters.loadBalance || Client.controlClient === undefined) {
         if (this._connectionCallback) {
+          logger.silly("900")
           return this._connectionCallback(err)
         }
+        logger.silly("903")
         this.emit('error', err)
         return
       }
@@ -911,8 +919,10 @@ class Client extends EventEmitter {
   // the socket error on the client as well
   _handleErrorEvent(err) {
     if (this._connecting) {
+      logger.silly("918")
       return this._handleErrorWhileConnecting(err)
     }
+    logger.silly("921")
     this._queryable = false
     this._errorAllQueries(err)
     this.emit('error', err)
