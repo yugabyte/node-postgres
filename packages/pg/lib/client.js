@@ -368,6 +368,7 @@ class Client extends EventEmitter {
   }
 
   attachErrorListenerOnClientConnection(client) {
+    logger.silly("attached listener to client")
     client.on('error', () => {
       if (Client.hostServerInfo.has(client.host)) {
         logger.debug("Not able to connect to host " + client.host + " adding it to failedHosts")
@@ -423,6 +424,7 @@ class Client extends EventEmitter {
             Client.hostServerInfo.delete(client.host)
           client._connecting = false
           upHost = upHostsList.next()
+          this.attachErrorListenerOnClientConnection(client)
         })
     }
     if(!hostIsUp) {
