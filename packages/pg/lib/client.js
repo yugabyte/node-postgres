@@ -491,6 +491,8 @@ class Client extends EventEmitter {
     if (!client) {
       logger.silly("Client.controlClient is not initialized!");
     }
+    if(this._queryable) {
+    logger.silly("queriable is false")
     var result
     logger.silly(`Running query: ${YB_SERVERS_QUERY}`);
     try {
@@ -506,6 +508,16 @@ class Client extends EventEmitter {
           logger.error("Query failed with error: ", err);
       }
       logger.silly("in catch ");
+      this.getConnection()
+          .then(async (res) => {
+            Client.controlClient = res
+            await this.getServersInfo()
+          })
+          .catch((err) => {
+            return this.nowConnect(callback)
+          })
+    }} else {
+      logger.silly("queriable is false")
       this.getConnection()
           .then(async (res) => {
             Client.controlClient = res
