@@ -356,6 +356,7 @@ class Client extends EventEmitter {
             this._handleErrorEvent(error)
           }
         } else if (!this._connectionError) {
+          logger.silly(this.host)
           logger.silly("line 359")
           this._handleErrorEvent(error)
         }
@@ -491,8 +492,8 @@ class Client extends EventEmitter {
     if (!client) {
       logger.silly("Client.controlClient is not initialized!");
     }
-    if(this._queryable) {
-    logger.silly("queriable is false")
+    if (this._queryable) {
+    logger.silly("queriable is true")
     var result
     logger.silly(`Running query: ${YB_SERVERS_QUERY}`);
     try {
