@@ -121,6 +121,7 @@ class Client extends EventEmitter {
   }
   // Control Connection
   static controlClient = undefined
+  static controlClientHost = ""
   static lastTimeMetaDataFetched = new Date().getTime() / 1000
   // Map of host -> connectionCount
   static connectionMap = new Map()
@@ -357,7 +358,12 @@ class Client extends EventEmitter {
           }
         } else if (!this._connectionError) {
           logger.silly(this.host)
+          logger.silly(Client.controlClientHost)
           logger.silly("line 359")
+          if(Client.controlClientHost === this.host){
+            logger.silly("setting controlClient to undefined 1")
+            Client.controlClient = undefined
+          }
           this._handleErrorEvent(error)
         }
       }
@@ -406,6 +412,9 @@ class Client extends EventEmitter {
         .nowConnect()
         .then((res) => {
           hostIsUp = true
+          logger.silly("setting")
+          logger.silly(client.host)
+          Client.controlClientHost = client.host
         })
         .catch((err) => {
           client.connection =
@@ -482,6 +491,9 @@ class Client extends EventEmitter {
         }
       })
     }
+    logger.silly("setting 1")
+    logger.silly(client.host)
+    Client.controlClientHost = client.host
     logger.debug("Created control connection to host " + client.host)
     return client
   }
