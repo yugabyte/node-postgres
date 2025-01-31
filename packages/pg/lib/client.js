@@ -355,7 +355,7 @@ class Client extends EventEmitter {
             this._handleErrorEvent(error)
           }
         } else if (!this._connectionError) {
-          if (Client.controlClientHost === this.host) {
+          if (Client.controlClientHost === this.host && Client.controlClient != undefined) {
             logger.silly("Control Connection host might be down, marking control connection as undefined")
             Client.controlClient = undefined
           }
