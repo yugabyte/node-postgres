@@ -433,10 +433,16 @@ class Client extends EventEmitter {
   async getConnection() {
     logger.silly("Creating control connection...")
     let currConnectionString = this.connectionString
-    var client = new Client({
-      connectionString: currConnectionString,
-      connectionTimeoutMillis: 10000,
-    });
+    let client;
+    if (typeof currConnectionString !== "string") {
+      currConnectionString.connectionTimeoutMillis = 10000
+      client = new Client(currConnectionString)
+    } else {
+      client = new Client({
+          connectionString: currConnectionString,
+          connectionTimeoutMillis: 10000,
+      });
+    }
     this.attachErrorListenerOnClientConnection(client)
     let lookup = util.promisify(dns.lookup)
     let addresses = [{ address: client.host }]
