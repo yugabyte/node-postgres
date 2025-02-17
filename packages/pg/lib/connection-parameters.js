@@ -96,6 +96,8 @@ class ConnectionParameters {
     this.loadBalance = val('loadBalance', config)
     this.topologyKeys = val('topologyKeys', config)
     this.ybServersRefreshInterval = val('ybServersRefreshInterval', config)
+    this.fallbackToTopologyKeysOnly = val('fallbackToTopologyKeysOnly', config)
+    this.failedHostReconnectDelaySecs = val('failedHostReconnectDelaySecs', config)
 
     if (typeof this.loadBalance === 'string') {
       switch(this.loadBalance.toLowerCase()) {
@@ -112,7 +114,7 @@ class ConnectionParameters {
       }
     }
     if (this.topologyKeys !== '') {
-      if (!this.loadBalance) {
+      if (this.loadBalance !== 'false') {
         throw new Error(' You need to enable Load Balance feature to use Topology Aware! ')
       }
     }
@@ -122,6 +124,16 @@ class ConnectionParameters {
     }
     if(this.ybServersRefreshInterval<0 || this.ybServersRefreshInterval>600){
       this.ybServersRefreshInterval = 300
+    }
+    if (typeof this.fallbackToTopologyKeysOnly === 'string') {
+      this.fallbackToTopologyKeysOnly = this.fallbackToTopologyKeysOnly === 'true'
+    }
+    this.failedHostReconnectDelaySecs = Number(this.failedHostReconnectDelaySecs)
+    if(isNaN(this.failedHostReconnectDelaySecs) || !Number.isInteger(this.failedHostReconnectDelaySecs)){
+      throw new Error(' You need to Enter valid failedHostReconnectDelaySecs')
+    }
+    if(this.failedHostReconnectDelaySecs<0 || this.failedHostReconnectDelaySecs>60){
+      this.failedHostReconnectDelaySecs = 5
     }
     this.client_encoding = val('client_encoding', config)
     this.replication = val('replication', config)
@@ -163,6 +175,8 @@ class ConnectionParameters {
     add(params, this, 'loadBalance')
     add(params, this, 'topologyKeys')
     add(params, this, 'ybServersRefreshInterval')
+    add(params, this, 'fallbackToTopologyKeysOnly')
+    add(params, this, 'failedHostReconnectDelaySecs')
 
     var ssl = typeof this.ssl === 'object' ? this.ssl : this.ssl ? { sslmode: this.ssl } : {}
     add(params, ssl, 'sslmode')

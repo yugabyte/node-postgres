@@ -22,13 +22,17 @@ module.exports = {
   port: 5433,
 
   // Load Balance feature variable
-  loadBalance: false,
+  loadBalance: 'false',
 
   // Topology keys
   topologyKeys: '',
 
   // Refresh Interval
   ybServersRefreshInterval: 300,
+
+  fallbackToTopologyKeysOnly: false,
+
+  failedHostReconnectDelaySecs: 5,
 
   // number of rows to return at a time from a prepared statement's
   // portal. 0 will return all rows at once
