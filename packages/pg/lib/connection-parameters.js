@@ -98,7 +98,18 @@ class ConnectionParameters {
     this.ybServersRefreshInterval = val('ybServersRefreshInterval', config)
 
     if (typeof this.loadBalance === 'string') {
-      this.loadBalance = this.loadBalance === 'true'
+      switch(this.loadBalance.toLowerCase()) {
+        case 'true':
+        case 'any':
+        case 'prefer-primary':
+        case 'prefer-rr':
+        case 'only-primary':
+        case 'only-rr':
+        case 'false':
+          break;
+        default:
+          throw new Error('Invalid loadBalance value: Valid values are only-rr, only-primary, prefer-rr, prefer-primary, any or true');
+      }
     }
     if (this.topologyKeys !== '') {
       if (!this.loadBalance) {
