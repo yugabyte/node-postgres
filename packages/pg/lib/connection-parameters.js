@@ -114,7 +114,7 @@ class ConnectionParameters {
       }
     }
     if (this.topologyKeys !== '') {
-      if (this.loadBalance !== 'false') {
+      if (this.loadBalance === 'false') {
         throw new Error(' You need to enable Load Balance feature to use Topology Aware! ')
       }
     }

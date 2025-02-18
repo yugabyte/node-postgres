@@ -633,7 +633,8 @@ class Client extends EventEmitter {
         }
       } else {
         let start = new Date().getTime();
-        if (start - Client.failedHostsTime.get(eachServer.host) > (DEFAULT_FAILED_HOST_TTL_SECONDS * 1000)) {
+        logger.silly("failedHostReconnectDelaySecs is set to: " + this.connectionParameters.failedHostReconnectDelaySecs)
+        if (start - Client.failedHostsTime.get(eachServer.host) > (this.connectionParameters.failedHostReconnectDelaySecs * 1000)) {
           logger.debug("Removing " + eachServer.host + " from failed host list")
           Client.connectionMap.set(eachServer.host, 0)
           Client.failedHosts.delete(eachServer.host)
