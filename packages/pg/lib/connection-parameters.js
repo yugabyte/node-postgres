@@ -112,6 +112,12 @@ class ConnectionParameters {
         default:
           throw new Error('Invalid loadBalance value: Valid values are only-rr, only-primary, prefer-rr, prefer-primary, any or true');
       }
+    } else if (typeof this.loadBalance === 'boolean') {
+      if (this.loadBalance) {
+        this.loadBalance = 'true'
+      } else {
+        this.loadBalance = 'false'
+      }
     }
     if (this.topologyKeys !== '') {
       if (this.loadBalance === 'false') {
