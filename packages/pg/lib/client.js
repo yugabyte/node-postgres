@@ -835,7 +835,20 @@ class Client extends EventEmitter {
               return this.nowConnect(callback)
             })
         } else {
-          return this.nowConnect(callback)
+          let res = this.nowConnect(callback);
+
+          if (res instanceof Promise) {
+            return res
+              .then(result => {
+                return result;
+              })
+              .catch(error => {
+                lock.release();
+                throw error;
+              });
+          } else {
+            return res;
+          }
         }
       }
     })
