@@ -1,6 +1,6 @@
 {
   "name": "@yugabytedb/pg",
-  "version": "8.7.3-yb-8",
+  "version": "8.7.3-yb-9",
   "description": "Pure JavaScript PostgreSQL client and native libpq bindings with YugabyteDB smart-driver features",
   "keywords": [
     "database",
@@ -20,8 +20,8 @@
   },
   "author": "Brian Carlson <brian.m.carlson@gmail.com>",
   "contributors": [
-     "Priyanshi Gupta <pgupta@yugabyte.com>",
-     "Harsh Daryani <hdaryani@yugabyte.com>"
+    "Priyanshi Gupta <pgupta@yugabyte.com>",
+    "Harsh Daryani <hdaryani@yugabyte.com>"
   ],
   "main": "./lib",
   "dependencies": {
@@ -60,6 +60,6 @@
     "node": ">= 8.0.0"
   },
   "publishConfig": {
-   "access": "public"
+    "access": "public"
   }
 }

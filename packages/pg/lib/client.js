@@ -173,6 +173,7 @@ class Client extends EventEmitter {
     } else {
       hostServerInfo = new Map(Client.hostServerInfoRR);
     }
+    logger.silly("Potential hosts: " + [...hostServerInfo])
     let minConnectionCount = Number.MAX_VALUE
     let leastLoadedHosts = []
     for (var i = 1; i <= Client.topologyKeyMap.size; i++) {
@@ -409,7 +410,6 @@ class Client extends EventEmitter {
           }
         } else if (!this._connectionError) {
           if (Client.controlClientHost === this.host && Client.controlClient != undefined) {
-            console.log("Control Connection host might be down, marking control connection as undefined")
             logger.silly("Control Connection host might be down, marking control connection as undefined")
             Client.controlClient = undefined
           }
@@ -426,14 +426,14 @@ class Client extends EventEmitter {
   attachErrorListenerOnClientConnection(client) {
     client.on('error', () => {
       if (Client.hostServerInfoPrimary.has(client.host)) {
-        logger.debug("Not able to connect to host " + client.host + " adding it to failedHosts")
+        logger.debug("Not able to connect to primary host " + client.host + ", adding it to failedHosts")
         Client.failedHosts.set(client.host, Client.hostServerInfoPrimary.get(client.host))
         let start = new Date().getTime();
         Client.failedHostsTime.set(client.host, start)
         Client.connectionMap.delete(client.host)
         Client.hostServerInfoPrimary.delete(client.host)
       } else if (Client.hostServerInfoRR.has(client.host)) {
-        logger.debug("Not able to connect to host " + client.host + " adding it to failedHosts")
+        logger.debug("Not able to connect to read replica host " + client.host + ", adding it to failedHosts")
         Client.failedHosts.set(client.host, Client.hostServerInfoRR.get(client.host))
         let start = new Date().getTime();
         Client.failedHostsTime.set(client.host, start)
@@ -446,6 +446,9 @@ class Client extends EventEmitter {
   }
 
   async iterateHostList(client) {
+    logger.silly("hostServerInfoPrimary: " + [...Client.hostServerInfoPrimary])
+    logger.silly("hostServerInfoRR: " + [...Client.hostServerInfoRR])
+    logger.silly("failedHosts: " + [...Client.failedHosts])
     let upHostsList = [...Client.hostServerInfoPrimary.keys(), ...Client.hostServerInfoRR.keys()][Symbol.iterator]()
     let upHost = upHostsList.next()
     let hostIsUp = false
@@ -611,7 +614,6 @@ class Client extends EventEmitter {
         }
       } else {
         let start = new Date().getTime();
-        logger.silly("failedHostReconnectDelaySecs is set to: " + this.connectionParameters.failedHostReconnectDelaySecs)
         if (start - Client.failedHostsTime.get(eachServer.host) > (this.connectionParameters.failedHostReconnectDelaySecs * 1000)) {
           logger.debug("Removing " + eachServer.host + " from failed host list")
           Client.connectionMap.set(eachServer.host, 0)
@@ -799,6 +801,11 @@ class Client extends EventEmitter {
       return this.nowConnect(callback)
     }
     lock.acquire().then(() => {
+      logger.silly("loadBalance: " + this.connectionParameters.loadBalance)
+      logger.silly("topologyKeys: " + this.connectionParameters.topologyKeys)
+      logger.silly("ybServersRefreshInterval: " + this.connectionParameters.ybServersRefreshInterval)
+      logger.silly("fallbackToTopologyKeysOnly: " + this.connectionParameters.fallbackToTopologyKeysOnly)
+      logger.silly("failedHostReconnectDelaySecs: " + this.connectionParameters.failedHostReconnectDelaySecs)
       if (Client.controlClient === undefined) {
         this.getConnection()
           .then(async (res) => {
@@ -843,6 +850,7 @@ class Client extends EventEmitter {
                 return result;
               })
               .catch(error => {
+                logger.silly("Releasing lock.")
                 lock.release();
                 throw error;
               });

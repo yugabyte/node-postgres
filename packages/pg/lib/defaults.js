@@ -30,8 +30,10 @@ module.exports = {
   // Refresh Interval
   ybServersRefreshInterval: 300,
 
+  // Fallback to Topology keys only
   fallbackToTopologyKeysOnly: false,
 
+  // Failed host reconnect delay seconds
   failedHostReconnectDelaySecs: 5,
 
   // number of rows to return at a time from a prepared statement's
