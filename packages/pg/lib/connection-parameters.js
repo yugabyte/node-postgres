@@ -100,7 +100,7 @@ class ConnectionParameters {
     this.failedHostReconnectDelaySecs = val('failedHostReconnectDelaySecs', config)
 
     if (typeof this.loadBalance === 'string') {
-      switch(this.loadBalance.toLowerCase()) {
+      switch (this.loadBalance.toLowerCase()) {
         case 'true':
         case 'any':
         case 'prefer-primary':
@@ -125,20 +125,20 @@ class ConnectionParameters {
       }
     }
     this.ybServersRefreshInterval = Number(this.ybServersRefreshInterval)
-    if(isNaN(this.ybServersRefreshInterval) || !Number.isInteger(this.ybServersRefreshInterval)){
+    if (isNaN(this.ybServersRefreshInterval) || !Number.isInteger(this.ybServersRefreshInterval)) {
       throw new Error(' You need to Enter valid Refresh Interval ')
     }
-    if(this.ybServersRefreshInterval<0 || this.ybServersRefreshInterval>600){
+    if (this.ybServersRefreshInterval < 0 || this.ybServersRefreshInterval > 600) {
       this.ybServersRefreshInterval = 300
     }
     if (typeof this.fallbackToTopologyKeysOnly === 'string') {
       this.fallbackToTopologyKeysOnly = this.fallbackToTopologyKeysOnly === 'true'
     }
     this.failedHostReconnectDelaySecs = Number(this.failedHostReconnectDelaySecs)
-    if(isNaN(this.failedHostReconnectDelaySecs) || !Number.isInteger(this.failedHostReconnectDelaySecs)){
-      throw new Error(' You need to Enter valid failedHostReconnectDelaySecs')
+    if (isNaN(this.failedHostReconnectDelaySecs) || !Number.isInteger(this.failedHostReconnectDelaySecs)) {
+      throw new Error('Enter a valid value for failedHostReconnectDelaySecs')
     }
-    if(this.failedHostReconnectDelaySecs<0 || this.failedHostReconnectDelaySecs>60){
+    if (this.failedHostReconnectDelaySecs < 0 || this.failedHostReconnectDelaySecs > 60) {
       this.failedHostReconnectDelaySecs = 5
     }
     this.client_encoding = val('client_encoding', config)
