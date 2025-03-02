@@ -842,6 +842,9 @@ class Client extends EventEmitter {
           this.getServersInfo()
             .then((res) => {
               this.updateMetaData(res.rows)
+              if (this.connectionParameters.topologyKeys !== '') {
+                this.createTopologyKeyMap()
+              }
               return this.nowConnect(callback)
             })
             .catch((err) => {
