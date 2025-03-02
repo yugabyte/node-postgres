@@ -826,6 +826,9 @@ class Client extends EventEmitter {
                 } catch (err) {
                   if (err.message.includes('Bad Topology Key found')) {
                     throw err
+                  } else {
+                    //ToDo: Why not throw the error?
+                    logger.debug("Error caught: " + err.message)
                   }
                 }
               })
