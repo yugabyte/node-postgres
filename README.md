@@ -14,10 +14,10 @@ Users can use this feature in two configurations.
 
 In the cluster-aware connection load balancing, connections are distributed across all the tservers in the cluster, irrespective of their placements.
 
-To enable the cluster-aware connection load balancing, provide the parameter `loadBalance` set to true as `loadBalance=true` in the connection url or the connection string (DSN style).
+To enable the cluster-aware connection load balancing, provide the parameter `loadBalance` set to true or any as `loadBalance=any` in the connection url or the connection string (DSN style). [This section](#read-replica-cluster) explains the different values for `load_balance` parameter.
 
 ```
-"postgresql://username:password@localhost:5433/database_name?loadBalance=true"
+"postgresql://username:password@localhost:5433/database_name?loadBalance=any"
 ```
 
 With this parameter specified in the url, the driver will fetch and maintain the list of tservers from the given endpoint (`localhost` in above example) available in the YugabyteDB cluster and distribute the connections equally across them.
@@ -32,7 +32,7 @@ With topology-aware connnection load balancing, users can target tservers in spe
 
 The connections will be distributed equally with the tservers in these zones.
 
-Note that, you would still need to specify `loadBalance=true` to enable the topology-aware connection load balancing.
+Note that, you would still need to specify `loadBalance` to one of the 5 allowed values to enable the topology-aware connection load balancing.
 
 ```
 "postgresql://username:password@localhost:5433/database_name?loadBalance=true&topologyKeys=cloud1.region1.zone1,cloud1.region1.zone2"
@@ -67,6 +67,30 @@ To specify Refresh Interval, use the parameter `ybServersRefreshInterval` in the
 "postgres://username:password@localhost:5433/database_name?ybServersRefreshInterval=X&loadBalance=true&topologyKeys=cloud1.region1.*:1,cloud1.region2.*:2";
 ```
 Here, X is the value of the refresh interval (seconds) in integer. 
+
+## Other Connection Parameters:
+
+### fallback_to_topology_keys_only
+
+Applicable only for TopologyAware Load Balancing. When set to true, the smart driver does not attempt to connect to servers outside of primary and fallback placements specified via property. The default behaviour is to fallback to any available server in the entire cluster.(default value: false)
+
+### failed_host_reconnect_delay_secs
+
+The driver marks a server as failed with a timestamp, when it cannot connect to it. Later, whenever it refreshes the server list via yb_servers(), if it sees the failed server in the response, it marks the server as UP only if failed-host-reconnect-delay-secs time has elapsed. (The yb_servers() function does not remove a failed server immediately from its result and retains it for a while.)(default value: 5 seconds)
+
+## Read Replica Cluster
+
+node-postgres smart driver also enables load balancing across nodes in primary clusters which have associated Read Replica cluster.
+
+The connection property `loadBalance` allows five values using which users can distribute connections among different combination of nodes as per their requirements:
+
+- `only-rr` - Create connections only on Read Replica nodes
+- `only-primary` - Create connections only on primary cluster nodes
+- `prefer-rr` - Create connections on Read Replica nodes. If none available, on any node in the cluster including primary cluster nodes
+- `prefer-primary` - Create connections on primary cluster nodes. If none available, on any node in the cluster including Read Replica nodes
+- `any` or `true` - Equivalent to value true. Create connections on any node in the primary or Read Replica cluster
+
+default value is false
 
 To know more visit the [docs page](https://docs.yugabyte.com/preview/drivers-orms/).
 

@@ -17,11 +17,12 @@ const YB_SERVERS_QUERY = 'SELECT * FROM yb_servers()'
 const DEFAULT_FAILED_HOST_TTL_SECONDS = 5
 
 class ServerInfo {
-  constructor(hostName, port, placementInfo, public_ip) {
+  constructor(hostName, port, placementInfo, public_ip, node_type) {
     this.hostName = hostName
     this.port = port
     this.placementInfo = placementInfo
     this.public_ip = public_ip
+    this.node_type = node_type
   }
 }
 
@@ -67,6 +68,8 @@ class Client extends EventEmitter {
     this.loadBalance = this.connectionParameters.loadBalance
     this.topologyKeys = this.connectionParameters.topologyKeys
     this.ybServersRefreshInterval = this.connectionParameters.ybServersRefreshInterval
+    this.fallbackToTopologyKeysOnly = this.connectionParameters.fallbackToTopologyKeysOnly
+    this.failedHostReconnectDelaySecs = this.connectionParameters.failedHostReconnectDelaySecs
     this.connectionString = config
     // "hiding" the password so it doesn't show up in stack traces
     // or if the client is console.logged
@@ -130,13 +133,13 @@ class Client extends EventEmitter {
   static failedHosts = new Map()
   // Map of failedHost -> Time at which host was added to failedHosts Map
   static failedHostsTime = new Map()
-  // Map of placementInfoOfHost -> list of Hosts
-  static placementInfoHostMap = new Map()
-  // Map of Host -> ServerInfo
-  static hostServerInfo = new Map()
+  // Map of Primary Host -> ServerInfo
+  static hostServerInfoPrimary = new Map()
+  // Map of RR Host -> ServerInfo
+  static hostServerInfoRR = new Map()
   // Boolean to check if public IP needs to be used or not
   static usePublic = false
-  // Map of topology Keys provided in URL
+  // Map of preference value as key and the list of placements as its value
   static topologyKeyMap = new Map()
 
   _errorAllQueries(err) {
@@ -156,23 +159,34 @@ class Client extends EventEmitter {
   }
 
   getLeastLoadedServer(hostsList) {
-    logger.silly("getLeastLoadedServer() is called")
+    logger.silly("getLeastLoadedServer(): hostsList" + [...hostsList])
     if (hostsList.size === 0) {
       return this.host
     }
+
+    let hostServerInfo;
+
+    if (this.connectionParameters.loadBalance === 'any' || this.connectionParameters.loadBalance === 'true') {
+      hostServerInfo = new Map([...Client.hostServerInfoPrimary, ...Client.hostServerInfoRR]);
+    } else if (this.connectionParameters.loadBalance === 'only-primary' || this.connectionParameters.loadBalance === 'prefer-primary') {
+      hostServerInfo = new Map(Client.hostServerInfoPrimary);
+    } else {
+      hostServerInfo = new Map(Client.hostServerInfoRR);
+    }
+    logger.silly("Potential hosts: " + [...hostServerInfo])
     let minConnectionCount = Number.MAX_VALUE
     let leastLoadedHosts = []
     for (var i = 1; i <= Client.topologyKeyMap.size; i++) {
       let hosts = hostsList.keys()
       for (let host of hosts) {
         let placementInfoOfHost
-        if (Client.hostServerInfo.has(host)) {
-          placementInfoOfHost = Client.hostServerInfo.get(host).placementInfo
+        if (hostServerInfo.has(host)) {
+          placementInfoOfHost = hostServerInfo.get(host).placementInfo
         } else {
-          placementInfoOfHost = hostsList.get(host).placementInfo
+          continue
         }
         var toCheckStar = placementInfoOfHost.split('.')
-        var starPlacementInfoOfHost = toCheckStar[0]+"."+toCheckStar[1]+".*"
+        var starPlacementInfoOfHost = toCheckStar[0] + "." + toCheckStar[1] + ".*"
         if (!Client.topologyKeyMap.get(i).includes(placementInfoOfHost) && !Client.topologyKeyMap.get(i).includes(starPlacementInfoOfHost)) {
           continue
         }
@@ -190,31 +204,30 @@ class Client extends EventEmitter {
           leastLoadedHosts.push(host)
         }
       }
-      if(leastLoadedHosts.length != 0){
+      if (leastLoadedHosts.length != 0) {
         break
       }
     }
 
     if (leastLoadedHosts.length === 0) {
-      let hosts = hostsList.keys()
-      for (let value of hosts) {
-        let hostCount
-        if (typeof hostsList.get(value) === 'object') {
-          hostCount = 0
-        } else {
-          hostCount = hostsList.get(value)
+      if (!(this.connectionParameters.loadBalance === 'prefer-primary' || this.connectionParameters.loadBalance === 'prefer-rr')) {
+        if (Client.topologyKeyMap.size === 0 || !this.connectionParameters.fallbackToTopologyKeysOnly) {
+          leastLoadedHosts = this.getHosts(hostsList, hostServerInfo)
         }
-        if (minConnectionCount > hostCount) {
-          leastLoadedHosts = []
-          minConnectionCount = hostCount
-          leastLoadedHosts.push(value)
-        } else if (minConnectionCount === hostCount) {
-          leastLoadedHosts.push(value)
+      } else {
+        leastLoadedHosts = this.getHosts(hostsList, hostServerInfo)
+        if (leastLoadedHosts.length === 0) {
+          if (this.connectionParameters.loadBalance === 'prefer-primary') {
+            leastLoadedHosts = this.getHosts(hostsList, new Map(Client.hostServerInfoRR))
+          } else {
+            leastLoadedHosts = this.getHosts(hostsList, new Map(Client.hostServerInfoPrimary))
+          }
         }
       }
     }
+
     if (leastLoadedHosts.length === 0) {
-      return this.host
+      throw new Error('Could not find a least loaded server.')
     }
     let randomIdx = Math.floor(Math.random() * leastLoadedHosts.length - 1) + 1
     let leastLoadedHost = leastLoadedHosts[randomIdx]
@@ -223,9 +236,35 @@ class Client extends EventEmitter {
     return leastLoadedHost
   }
 
+  getHosts(hostsList, hostServerInfo) {
+    let minConnectionCount = Number.MAX_VALUE
+    let leastLoadedHosts = []
+
+    let hosts = hostsList.keys()
+    for (let value of hosts) {
+      if (!hostServerInfo.has(value)) {
+        continue
+      }
+      let hostCount
+      if (typeof hostsList.get(value) === 'object') {
+        hostCount = 0
+      } else {
+        hostCount = hostsList.get(value)
+      }
+      if (minConnectionCount > hostCount) {
+        leastLoadedHosts = []
+        minConnectionCount = hostCount
+        leastLoadedHosts.push(value)
+      } else if (minConnectionCount === hostCount) {
+        leastLoadedHosts.push(value)
+      }
+    }
+    return leastLoadedHosts
+  }
+
   isValidKey(key) {
     var zones = key.split(':')
-    if (zones.length == 0 || zones.length >2) {
+    if (zones.length == 0 || zones.length > 2) {
       logger.warn("Given topology-key " + key + " is invalid")
       return false
     }
@@ -234,11 +273,11 @@ class Client extends EventEmitter {
       logger.warn("Given topology-key " + key + " is invalid")
       return false
     }
-    if (zones[1]==undefined) {
-      zones[1]='1'
+    if (zones[1] == undefined) {
+      zones[1] = '1'
     }
-    zones[1]=Number(zones[1])
-    if (zones[1]<1 || zones[1]>10 || isNaN(zones[1]) || !Number.isInteger(zones[1])) {
+    zones[1] = Number(zones[1])
+    if (zones[1] < 1 || zones[1] > 10 || isNaN(zones[1]) || !Number.isInteger(zones[1])) {
       logger.warn("Given topology-key " + key + " is invalid")
       return false
     }
@@ -257,7 +296,11 @@ class Client extends EventEmitter {
     } else if (Client.failedHosts.has(host)) {
       logger.debug("Removing " + host + " from failed host list")
       let serverInfo = Client.failedHosts.get(host)
-      Client.hostServerInfo.set(host, serverInfo)
+      if (serverInfo.node_type === 'primary') {
+        Client.hostServerInfoPrimary.set(host, serverInfo)
+      } else if (serverInfo.node_type === 'read_replica') {
+        Client.hostServerInfoRR.set(host, serverInfo)
+      }
       Client.failedHosts.delete(host)
       Client.failedHostsTime.delete(host)
     }
@@ -268,7 +311,7 @@ class Client extends EventEmitter {
   _connect(callback) {
     logger.silly("connect() is called")
     var self = this
-    if (this.connectionParameters.loadBalance && this._connecting) {
+    if (this.connectionParameters.loadBalance !== 'false' && this._connecting) {
       this.connection =
         this.config.connection ||
         new Connection({
@@ -298,12 +341,17 @@ class Client extends EventEmitter {
         con.stream.destroy(new Error('timeout expired'))
       }, this._connectionTimeoutMillis)
     }
-    if (this.connectionParameters.loadBalance) {
-      if (Client.connectionMap.size && Client.hostServerInfo.size) {
+    if (this.connectionParameters.loadBalance !== 'false') {
+      if (Client.connectionMap.size && (Client.hostServerInfoPrimary.size || Client.hostServerInfoRR.size)) {
         this.host = this.getLeastLoadedServer(Client.connectionMap)
-        this.port = Client.hostServerInfo.get(this.host).port
+        if (Client.hostServerInfoPrimary.has(this.host)) {
+          this.port = Client.hostServerInfoPrimary.get(this.host).port
+        } else if (Client.hostServerInfoRR.has(this.host)) {
+          this.port = Client.hostServerInfoRR.get(this.host).port
+        }
         logger.silly("Least loaded host received " + this.host + " port " + this.port)
       } else if (Client.failedHosts.size) {
+        //ToDo: Why call getLeastLoadedServer with the failedHosts Map? Is this still required?
         this.host = this.getLeastLoadedServer(Client.failedHosts)
         this.port = Client.failedHosts.get(this.host).port
         logger.silly("Least loaded host from failed host list received " + this.host + " port " + this.port)
@@ -311,7 +359,12 @@ class Client extends EventEmitter {
     }
     if (Client.usePublic) {
       let currentHost = this.host
-      let serverInfo = Client.hostServerInfo.get(currentHost)
+      let serverInfo
+      if (Client.hostServerInfoPrimary.has(this.host)) {
+        serverInfo = Client.hostServerInfoPrimary.get(currentHost)
+      } else if (Client.hostServerInfoRR.has(this.host)) {
+        serverInfo = Client.hostServerInfoRR.get(currentHost)
+      }
       this.prevHostIfUsePublic = currentHost
       this.host = serverInfo.public_ip
       logger.silly("Using public ips, host " + this.host)
@@ -371,13 +424,20 @@ class Client extends EventEmitter {
 
   attachErrorListenerOnClientConnection(client) {
     client.on('error', () => {
-      if (Client.hostServerInfo.has(client.host)) {
-        logger.debug("Not able to connect to host " + client.host + " adding it to failedHosts")
-        Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
+      if (Client.hostServerInfoPrimary.has(client.host)) {
+        logger.debug("Not able to connect to primary host " + client.host + ", adding it to failedHosts")
+        Client.failedHosts.set(client.host, Client.hostServerInfoPrimary.get(client.host))
         let start = new Date().getTime();
         Client.failedHostsTime.set(client.host, start)
         Client.connectionMap.delete(client.host)
-        Client.hostServerInfo.delete(client.host)
+        Client.hostServerInfoPrimary.delete(client.host)
+      } else if (Client.hostServerInfoRR.has(client.host)) {
+        logger.debug("Not able to connect to read replica host " + client.host + ", adding it to failedHosts")
+        Client.failedHosts.set(client.host, Client.hostServerInfoRR.get(client.host))
+        let start = new Date().getTime();
+        Client.failedHostsTime.set(client.host, start)
+        Client.connectionMap.delete(client.host)
+        Client.hostServerInfoRR.delete(client.host)
       }
       logger.silly("Control Connection host is down, marking control connection as undefined")
       Client.controlClient = undefined
@@ -385,9 +445,10 @@ class Client extends EventEmitter {
   }
 
   async iterateHostList(client) {
-    logger.silly([...Client.hostServerInfo])
-    logger.silly([...Client.failedHosts])
-    let upHostsList = Client.hostServerInfo.keys()
+    logger.silly("hostServerInfoPrimary: " + [...Client.hostServerInfoPrimary])
+    logger.silly("hostServerInfoRR: " + [...Client.hostServerInfoRR])
+    logger.silly("failedHosts: " + [...Client.failedHosts])
+    let upHostsList = [...Client.hostServerInfoPrimary.keys(), ...Client.hostServerInfoRR.keys()][Symbol.iterator]()
     let upHost = upHostsList.next()
     let hostIsUp = false
     while (upHost.value !== undefined && !hostIsUp) {
@@ -414,17 +475,18 @@ class Client extends EventEmitter {
               keepAliveInitialDelayMillis: client.config.keepAliveInitialDelayMillis || 0,
               encoding: client.connectionParameters.client_encoding || 'utf8',
             })
-            logger.debug("Not able to create control connection to host " + client.host + " adding it to failedHosts")
-            Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
-            let start = new Date().getTime();
-            Client.failedHostsTime.set(client.host, start)
-            Client.connectionMap.delete(client.host)
-            Client.hostServerInfo.delete(client.host)
+          logger.debug("Not able to create control connection to host " + client.host + " adding it to failedHosts")
+          Client.failedHosts.set(client.host, Client.hostServerInfo.get(client.host))
+          let start = new Date().getTime();
+          Client.failedHostsTime.set(client.host, start)
+          Client.connectionMap.delete(client.host)
+          Client.hostServerInfoPrimary.delete(client.host)
+          Client.hostServerInfoRR.delete(client.host)
           client._connecting = false
           upHost = upHostsList.next()
         })
     }
-    if(!hostIsUp) {
+    if (!hostIsUp) {
       logger.debug("Not able to create control connection to any host in the cluster")
       throw new Error('Not able to create control connection to any host in the cluster')
     }
@@ -439,8 +501,8 @@ class Client extends EventEmitter {
       client = new Client(currConnectionString)
     } else {
       client = new Client({
-          connectionString: currConnectionString,
-          connectionTimeoutMillis: 10000,
+        connectionString: currConnectionString,
+        connectionTimeoutMillis: 10000,
       });
     }
     this.attachErrorListenerOnClientConnection(client)
@@ -450,8 +512,8 @@ class Client extends EventEmitter {
       addresses = res
     })
     client.host = addresses[0].address // If both resolved then - IPv6 else IPv4
-    client.loadBalance = false
-    client.connectionParameters.loadBalance = false
+    client.loadBalance = 'false'
+    client.connectionParameters.loadBalance = 'false'
     client.topologyKeys = ''
     client.connectionParameters.topologyKeys = ''
     if (Client.failedHosts.has(client.host)) {
@@ -516,25 +578,26 @@ class Client extends EventEmitter {
 
   createServersList(data) {
     logger.silly("Creating servers list")
-    Client.hostServerInfo.clear()
-    Client.placementInfoHostMap.clear()
+    Client.hostServerInfoPrimary.clear()
+    Client.hostServerInfoRR.clear()
     data.forEach((eachServer) => {
       var placementInfo = eachServer.cloud + '.' + eachServer.region + '.' + eachServer.zone
-      var server = new ServerInfo(eachServer.host, eachServer.port, placementInfo, eachServer.public_ip)
-      if (Client.placementInfoHostMap.has(placementInfo)) {
-        let currentHosts = Client.placementInfoHostMap.get(placementInfo)
-        currentHosts.push(eachServer.host)
-        Client.placementInfoHostMap.set(placementInfo, currentHosts)
+      var nodeType = eachServer.node_type
+      var server = new ServerInfo(eachServer.host, eachServer.port, placementInfo, eachServer.public_ip, eachServer.node_type)
+      if (nodeType === 'primary') {
+        Client.hostServerInfoPrimary.set(eachServer.host, server)
+        if (eachServer.public_ip === this.host) {
+          Client.usePublic = true
+        }
       } else {
-        Client.placementInfoHostMap.set(placementInfo, [eachServer.host])
-      }
-      Client.hostServerInfo.set(eachServer.host, server)
-      if (eachServer.public_ip === this.host) {
-        Client.usePublic = true
+        Client.hostServerInfoRR.set(eachServer.host, server)
+        if (eachServer.public_ip === this.host) {
+          Client.usePublic = true
+        }
       }
     })
-    logger.debug("Updated placementInfoHost Map " + [...Client.placementInfoHostMap])
-    logger.debug("Updated hostServerInfo to " + [...Client.hostServerInfo] + " and usePublic to " + Client.usePublic)
+    logger.debug("Updated hostServerInfoPrimary to " + [...Client.hostServerInfoPrimary] + " and usePublic to " + Client.usePublic)
+    logger.debug("Updated hostServerInfoRR to " + [...Client.hostServerInfoRR] + " and usePublic to " + Client.usePublic)
   }
 
   createConnectionMap(data) {
@@ -542,15 +605,15 @@ class Client extends EventEmitter {
     const currConnectionMap = new Map(Client.connectionMap)
     Client.connectionMap.clear()
     data.forEach((eachServer) => {
-      if(!Client.failedHosts.has(eachServer.host)){
-        if(currConnectionMap.has(eachServer.host)){
+      if (!Client.failedHosts.has(eachServer.host)) {
+        if (currConnectionMap.has(eachServer.host)) {
           Client.connectionMap.set(eachServer.host, currConnectionMap.get(eachServer.host))
         } else {
           Client.connectionMap.set(eachServer.host, 0)
         }
       } else {
         let start = new Date().getTime();
-        if (start - Client.failedHostsTime.get(eachServer.host) > (DEFAULT_FAILED_HOST_TTL_SECONDS * 1000)) {
+        if (start - Client.failedHostsTime.get(eachServer.host) > (this.connectionParameters.failedHostReconnectDelaySecs * 1000)) {
           logger.debug("Removing " + eachServer.host + " from failed host list")
           Client.connectionMap.set(eachServer.host, 0)
           Client.failedHosts.delete(eachServer.host)
@@ -568,16 +631,16 @@ class Client extends EventEmitter {
       let key = seperatedKeys[idx]
       if (this.isValidKey(key)) {
         var zones = key.split(':')
-        if (zones[1]==undefined) {
-          zones[1]='1'
+        if (zones[1] == undefined) {
+          zones[1] = '1'
         }
-        zones[1]=parseInt(zones[1])
+        zones[1] = parseInt(zones[1])
         if (Client.topologyKeyMap.has(zones[1])) {
           let currentzones = Client.topologyKeyMap.get(zones[1])
           currentzones.push(zones[0])
-          Client.topologyKeyMap.set(zones[1],currentzones)
+          Client.topologyKeyMap.set(zones[1], currentzones)
         } else {
-          Client.topologyKeyMap.set(zones[1],[zones[0]])
+          Client.topologyKeyMap.set(zones[1], [zones[0]])
         }
       } else {
         throw new Error('Bad Topology Key found - ' + key)
@@ -600,17 +663,24 @@ class Client extends EventEmitter {
     logger.silly("nowConnect() is called...")
     if (callback) {
       logger.silly("callback is not null")
-      if (this.connectionParameters.loadBalance) {
+      if (this.connectionParameters.loadBalance !== 'false') {
         this._connect((error) => {
           if (error) {
-            if (this.connectionParameters.loadBalance) {
-              if (Client.hostServerInfo.has(this.host)) {
+            if (this.connectionParameters.loadBalance !== 'false') {
+              if (Client.hostServerInfoPrimary.has(this.host)) {
                 logger.debug("Adding " + this.host + " to failed host list")
-                Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
+                Client.failedHosts.set(this.host, Client.hostServerInfoPrimary.get(this.host))
                 let start = new Date().getTime();
                 Client.failedHostsTime.set(this.host, start)
                 Client.connectionMap.delete(this.host)
-                Client.hostServerInfo.delete(this.host)
+                Client.hostServerInfoPrimary.delete(this.host)
+              } else if (Client.hostServerInfoRR.has(this.host)) {
+                logger.debug("Adding " + this.host + " to failed host list")
+                Client.failedHosts.set(this.host, Client.hostServerInfoRR.get(this.host))
+                let start = new Date().getTime();
+                Client.failedHostsTime.set(this.host, start)
+                Client.connectionMap.delete(this.host)
+                Client.hostServerInfoRR.delete(this.host)
               } else if (Client.failedHosts.has(this.host)) {
                 logger.silly("Removing host " + this.host + " from failed hosts")
                 Client.failedHosts.delete(this.host)
@@ -623,7 +693,7 @@ class Client extends EventEmitter {
               return
             }
           } else {
-            if (this.connectionParameters.loadBalance) {
+            if (this.connectionParameters.loadBalance !== 'false') {
               lock.release()
               this.incrementConnectionCount()
             }
@@ -641,15 +711,23 @@ class Client extends EventEmitter {
       this._connect((error) => {
         if (error) {
           logger.silly("Not able to connect to " + this.host + " due to error " + error.message)
-          if (this.connectionParameters.loadBalance && Client.hostServerInfo.size !== 0) {
-            if (Client.hostServerInfo.has(this.host)) {
+          if (this.connectionParameters.loadBalance !== 'false' && (Client.hostServerInfoPrimary.size !== 0 || Client.hostServerInfoRR.size !== 0)) {
+            if (Client.hostServerInfoPrimary.has(this.host)) {
               logger.debug("Adding " + this.host + " to failed host list")
-              Client.failedHosts.set(this.host, Client.hostServerInfo.get(this.host))
+              Client.failedHosts.set(this.host, Client.hostServerInfoPrimary.get(this.host))
               let start = new Date().getTime();
               Client.failedHostsTime.set(this.host, start)
               Client.connectionMap.delete(this.host)
-              Client.hostServerInfo.delete(this.host)
+              Client.hostServerInfoPrimary.delete(this.host)
+            } else if (Client.hostServerInfoRR.has(this.host)) {
+              logger.debug("Adding " + this.host + " to failed host list")
+              Client.failedHosts.set(this.host, Client.hostServerInfoRR.get(this.host))
+              let start = new Date().getTime();
+              Client.failedHostsTime.set(this.host, start)
+              Client.connectionMap.delete(this.host)
+              Client.hostServerInfoRR.delete(this.host)
             } else if (Client.failedHosts.has(this.host)) {
+              //ToDo: Why remove the host from failedHosts? Is this still required?
               logger.silly("Removing host " + this.host + " from failed host list")
               Client.failedHosts.delete(this.host)
               Client.failedHostsTime.delete(this.host)
@@ -660,7 +738,7 @@ class Client extends EventEmitter {
             reject(error)
           }
         } else {
-          if (this.connectionParameters.loadBalance) {
+          if (this.connectionParameters.loadBalance !== 'false') {
             lock.release()
             this.incrementConnectionCount()
           }
@@ -672,10 +750,10 @@ class Client extends EventEmitter {
 
   updateConnectionMapAfterRefresh() {
     logger.silly("Updating connection map after refresh")
-    let hostsInfoList = Client.hostServerInfo.keys()
+    let hostsInfoList = [...Client.hostServerInfoPrimary.keys(), ...Client.hostServerInfoRR.keys()]
     for (let eachHost of hostsInfoList) {
       if (!Client.connectionMap.has(eachHost)) {
-        if(!Client.failedHosts.has(eachHost)){
+        if (!Client.failedHosts.has(eachHost)) {
           Client.connectionMap.set(eachHost, 0)
         } else {
           let start = new Date().getTime();
@@ -690,7 +768,7 @@ class Client extends EventEmitter {
     }
     let connectionMapHostList = Client.connectionMap.keys()
     for (let eachHost of connectionMapHostList) {
-      if (!Client.hostServerInfo.has(eachHost)) {
+      if (!Client.hostServerInfoPrimary.has(eachHost) && !Client.hostServerInfoRR.has(eachHost)) {
         Client.connectionMap.delete(eachHost)
       }
     }
@@ -718,11 +796,20 @@ class Client extends EventEmitter {
   }
 
   connect(callback) {
-    if (!this.connectionParameters.loadBalance) {
+    if (this.connectionParameters.loadBalance === 'false') {
       logger.silly("Loadbalance is false, falling to upstream behaviour")
       return this.nowConnect(callback)
     }
+    /* 
+    ToDo: We are holding the lock until the user connection gets created. 
+    This looks like an overkill, why is this required?
+    */
     lock.acquire().then(() => {
+      logger.silly("loadBalance: " + this.connectionParameters.loadBalance)
+      logger.silly("topologyKeys: " + this.connectionParameters.topologyKeys)
+      logger.silly("ybServersRefreshInterval: " + this.connectionParameters.ybServersRefreshInterval)
+      logger.silly("fallbackToTopologyKeysOnly: " + this.connectionParameters.fallbackToTopologyKeysOnly)
+      logger.silly("failedHostReconnectDelaySecs: " + this.connectionParameters.failedHostReconnectDelaySecs)
       if (Client.controlClient === undefined) {
         this.getConnection()
           .then(async (res) => {
@@ -739,6 +826,9 @@ class Client extends EventEmitter {
                 } catch (err) {
                   if (err.message.includes('Bad Topology Key found')) {
                     throw err
+                  } else {
+                    //ToDo: Why not throw the error?
+                    logger.debug("Error caught: " + err.message)
                   }
                 }
               })
@@ -752,6 +842,9 @@ class Client extends EventEmitter {
           this.getServersInfo()
             .then((res) => {
               this.updateMetaData(res.rows)
+              if (this.connectionParameters.topologyKeys !== '') {
+                this.createTopologyKeyMap()
+              }
               return this.nowConnect(callback)
             })
             .catch((err) => {
@@ -759,7 +852,21 @@ class Client extends EventEmitter {
               return this.nowConnect(callback)
             })
         } else {
-          return this.nowConnect(callback)
+          let res = this.nowConnect(callback);
+
+          if (res instanceof Promise) {
+            return res
+              .then(result => {
+                return result;
+              })
+              .catch(error => {
+                logger.silly("Releasing lock.")
+                lock.release();
+                throw error;
+              });
+          } else {
+            return res;
+          }
         }
       }
     })
@@ -889,7 +996,7 @@ class Client extends EventEmitter {
   _handleErrorWhileConnecting(err) {
     if (this._connectionError) {
       // TODO(bmc): this is swallowing errors - we shouldn't do this
-      if (this.connectionParameters.loadBalance || Client.controlClient === undefined) {
+      if (this.connectionParameters.loadBalance !== 'false' || Client.controlClient === undefined) {
         if (this._connectionCallback) {
           return this._connectionCallback(err)
         }
@@ -1205,14 +1312,14 @@ class Client extends EventEmitter {
     }
 
     lock.acquire().then(() => {
-      if (this.connectionParameters.loadBalance) {
+      if (this.connectionParameters.loadBalance !== 'false') {
         let prevCount = Client.connectionMap.get(this.host)
         if (prevCount > 0) {
           logger.debug("Decreasing connection count (" + prevCount + ") of " + this.host + " by 1")
           Client.connectionMap.set(this.host, prevCount - 1)
         }
-        lock.release()
       }
+      lock.release()
     })
 
     if (cb) {
