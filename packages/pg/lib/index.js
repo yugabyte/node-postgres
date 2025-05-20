@@ -3,7 +3,7 @@
 var Client = require('./client')
 var defaults = require('./defaults')
 var Connection = require('./connection')
-var Pool = require('pg-pool')
+var Pool = require('@yugabytedb/pg-pool')
 const { DatabaseError } = require('pg-protocol')
 
 const poolFactory = (Client) => {
