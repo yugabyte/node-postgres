@@ -58,7 +58,7 @@ class Lock {
 const lock = new Lock()
 class Client extends EventEmitter {
   constructor(config) {
-    logger.silly("Received connection string " + config)
+    logger.silly("Received connection string: " + (typeof config === 'string' ? config : JSON.stringify(config, null, 2)))
     super()
     this.connectionParameters = new ConnectionParameters(config)
     this.user = this.connectionParameters.user
@@ -159,7 +159,7 @@ class Client extends EventEmitter {
   }
 
   getLeastLoadedServer(hostsList) {
-    logger.silly("getLeastLoadedServer(): hostsList" + [...hostsList])
+    logger.silly("getLeastLoadedServer(): hostsList" + JSON.stringify(Array.from(hostsList.entries())))
     if (hostsList.size === 0) {
       return this.host
     }
@@ -173,7 +173,7 @@ class Client extends EventEmitter {
     } else {
       hostServerInfo = new Map(Client.hostServerInfoRR);
     }
-    logger.silly("Potential hosts: " + [...hostServerInfo])
+    logger.silly("Potential hosts: " + JSON.stringify(Array.from(hostServerInfo.entries())))
     let minConnectionCount = Number.MAX_VALUE
     let leastLoadedHosts = []
     for (var i = 1; i <= Client.topologyKeyMap.size; i++) {
@@ -445,9 +445,9 @@ class Client extends EventEmitter {
   }
 
   async iterateHostList(client) {
-    logger.silly("hostServerInfoPrimary: " + [...Client.hostServerInfoPrimary])
-    logger.silly("hostServerInfoRR: " + [...Client.hostServerInfoRR])
-    logger.silly("failedHosts: " + [...Client.failedHosts])
+    logger.silly("hostServerInfoPrimary: " + JSON.stringify(Array.from(Client.hostServerInfoPrimary.entries())))
+    logger.silly("hostServerInfoRR: " + JSON.stringify(Array.from(Client.hostServerInfoRR.entries())))
+    logger.silly("failedHosts: " + JSON.stringify(Array.from(Client.failedHosts)))
     let upHostsList = [...Client.hostServerInfoPrimary.keys(), ...Client.hostServerInfoRR.keys()][Symbol.iterator]()
     let upHost = upHostsList.next()
     let hostIsUp = false
@@ -596,8 +596,8 @@ class Client extends EventEmitter {
         }
       }
     })
-    logger.debug("Updated hostServerInfoPrimary to " + [...Client.hostServerInfoPrimary] + " and usePublic to " + Client.usePublic)
-    logger.debug("Updated hostServerInfoRR to " + [...Client.hostServerInfoRR] + " and usePublic to " + Client.usePublic)
+    logger.debug("Updated hostServerInfoPrimary to " + JSON.stringify(Array.from(Client.hostServerInfoPrimary.entries())) + " and usePublic to " + Client.usePublic)
+    logger.debug("Updated hostServerInfoRR to " + JSON.stringify(Array.from(Client.hostServerInfoRR.entries())) + " and usePublic to " + Client.usePublic)
   }
 
   createConnectionMap(data) {
@@ -621,7 +621,7 @@ class Client extends EventEmitter {
         }
       }
     })
-    logger.debug("Updated connection map " + [...Client.connectionMap])
+    logger.debug("Updated connection map " + JSON.stringify(Array.from(Client.connectionMap.entries())))
   }
 
   createTopologyKeyMap() {
@@ -646,7 +646,7 @@ class Client extends EventEmitter {
         throw new Error('Bad Topology Key found - ' + key)
       }
     }
-    logger.debug("Updated topologyKey Map " + [...Client.topologyKeyMap])
+    logger.debug("Updated topologyKey Map " + JSON.stringify(Array.from(Client.topologyKeyMap.entries())))
   }
 
   createMetaData(data) {
@@ -772,8 +772,8 @@ class Client extends EventEmitter {
         Client.connectionMap.delete(eachHost)
       }
     }
-    logger.debug("Updated connection Map after refresh " + [...Client.connectionMap]);
-    logger.debug("Updated failed host list after refresh " + [...Client.failedHosts]);
+    logger.debug("Updated connection Map after refresh " + JSON.stringify(Array.from(Client.connectionMap.entries())));
+    logger.debug("Updated failed host list after refresh " + JSON.stringify(Array.from(Client.failedHosts)));
   }
 
   updateMetaData(data) {
