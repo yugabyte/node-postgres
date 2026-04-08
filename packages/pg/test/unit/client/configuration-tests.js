@@ -4,7 +4,7 @@ var assert = require('assert')
 
 var pguser = process.env['PGUSER'] || process.env.USER
 var pgdatabase = process.env['PGDATABASE'] || process.env.USER
-var pgport = process.env['PGPORT'] || 5432
+var pgport = process.env['PGPORT'] || 5433
 
 test('client settings', function () {
   test('defaults', function () {
@@ -92,7 +92,7 @@ test('initializing from a config string', function () {
     assert.equal(client.user, process.env['PGUSER'] || process.env.USER)
     assert.equal(client.password, process.env['PGPASSWORD'] || null)
     assert.equal(client.host, 'host1')
-    assert.equal(client.port, process.env['PGPORT'] || 5432)
+    assert.equal(client.port, process.env['PGPORT'] || 5433)
     assert.equal(client.database, process.env['PGDATABASE'] || process.env.USER)
   })
 

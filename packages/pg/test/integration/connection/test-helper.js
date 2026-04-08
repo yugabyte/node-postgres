@@ -11,7 +11,7 @@ var connect = function (callback) {
     console.log(error)
     throw new Error('Connection error')
   })
-  con.connect(helper.args.port || '5432', helper.args.host || 'localhost')
+  con.connect(helper.args.port || '5433', helper.args.host || 'localhost')
   con.once('connect', function () {
     con.startup({
       user: username,
