@@ -16,7 +16,7 @@ suite.test('default values are used in new clients', function () {
     user: process.env.USER,
     database: undefined,
     password: null,
-    port: 5432,
+    port: 5433,
     rows: 0,
     max: 10,
     binary: false,
@@ -33,7 +33,7 @@ suite.test('default values are used in new clients', function () {
     user: process.env.USER,
     database: process.env.USER,
     password: null,
-    port: 5432,
+    port: 5433,
   })
 })
 
