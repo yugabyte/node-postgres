@@ -1,0 +1,84 @@
+# Two-container setup: YugabyteDB (YSQL) + Node.js runner for node-postgres tests.
+#
+# From the docker/ directory:
+#   docker compose up --build --abort-on-container-exit node-pg-tests
+#
+# The test container waits for YSQL health, then runs the configured test scope
+# against YugabyteDB via the standard PG* environment variables.
+#
+# Published host ports default to high numbers to avoid clashing with a local
+# YugabyteDB or Postgres instance. Override via environment or docker/.env:
+#   YB_PUBLISH_YSQL=45433
+#
+# Runtime behaviour knobs (all optional):
+#   YB_ENABLE_YSQL_CONN_MGR   1 → enable YSQL connection manager (default: 0)
+#   YB_TSERVER_FLAGS_EXTRA    Extra comma-separated tserver flags
+#   NODE_PG_TEST_SCOPE        Passed through to the test container (empty → run-tests.sh default: all)
+#   NODE_PG_SKIP_NATIVE       Passed through (empty → run-tests.sh default: false = run native leg in pg-only)
+#
+# This file does not set PGTESTNOSSL, SCRAM_TEST_*, or other vars that skip upstream tests.
+# Skips come only from the node-postgres repo’s own test code when env/setup does not match.
+
+services:
+  yugabyte:
+    image: ${YB_IMAGE:-yugabytedb/yugabyte:2025.2.2.1-b1}
+    # Official YB image is typically amd64; pin platform to avoid ambiguous
+    # emulation behaviour on arm64 hosts.
+    platform: "${YB_PLATFORM:-linux/amd64}"
+    hostname: yugabyte
+    command: ["/bin/bash", "/scripts/yugabyted-entrypoint.sh"]
+    environment:
+      YB_ENABLE_YSQL_CONN_MGR: "${YB_ENABLE_YSQL_CONN_MGR:-0}"
+      YB_TSERVER_FLAGS_EXTRA:  "${YB_TSERVER_FLAGS_EXTRA:-}"
+    ports:
+      - "${YB_PUBLISH_YSQL:-45433}:5433"
+      - "${YB_PUBLISH_9000:-49000}:9000"
+      - "${YB_PUBLISH_UI:-45434}:15433"
+      - "${YB_PUBLISH_YCQL:-49042}:9042"
+    # Single-node YugabyteDB is memory-hungry; guard against OOM kills.
+    shm_size: "1gb"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    volumes:
+      - ./yugabyted-entrypoint.sh:/scripts/yugabyted-entrypoint.sh:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/home/yugabyte/bin/ysqlsh -h yugabyte -p 5433 -U yugabyte -c 'SELECT 1' -q || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 90
+      # Under amd64 emulation on arm64 hosts, startup is slower.
+      start_period: 300s
+
+  node-pg-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.node-pg-tests
+    depends_on:
+      yugabyte:
+        condition: service_healthy
+    environment:
+      # Database connection
+      PGHOST:     yugabyte
+      PGPORT:     "5433"
+      PGUSER:     yugabyte
+      PGPASSWORD: yugabyte
+      PGDATABASE: yugabyte
+      # Optional overrides (empty/unset on host → see run-tests.sh defaults inside the container).
+      NODE_PG_TEST_SCOPE:   "${NODE_PG_TEST_SCOPE:-}"
+      NODE_PG_SKIP_NATIVE:  "${NODE_PG_SKIP_NATIVE:-}"
+      DB_WAIT_RETRIES:      "${DB_WAIT_RETRIES:-120}"
+      DB_WAIT_INTERVAL_SEC: "${DB_WAIT_INTERVAL_SEC:-2}"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    volumes:
+      # Mount the full node-postgres monorepo so changes are reflected immediately.
+      - ../node-postgres:/workspace/node-postgres
+    working_dir: /workspace/node-postgres

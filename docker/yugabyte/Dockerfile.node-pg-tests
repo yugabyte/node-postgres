@@ -1,0 +1,39 @@
+FROM node:18
+
+# System dependencies:
+#   make        - packages/pg Makefile-based test runner
+#   g++         - optional native addon compilation (pg-native)
+#   libpq-dev   - headers/libs for building pg-native against libpq
+#   pkg-config  - node-gyp finds libpq via pkg-config
+#   python3     - node-gyp dependency for native addons
+#   postgresql-client - psql for readiness checks inside the container
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        make \
+        g++ \
+        libpq-dev \
+        pkg-config \
+        python3 \
+        postgresql-client \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Enable Corepack so the pinned Yarn version from package.json is used.
+RUN corepack enable
+
+# libpq bundles node-gyp 5.x which uses Python's 'rU' file mode, removed in 3.11.
+# A modern global node-gyp avoids the ValueError.
+RUN npm install -g node-gyp@latest
+ENV npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js
+
+# GitHub dropped the git:// protocol. Some transitive deps still reference it,
+# so rewrite to https:// globally.
+RUN git config --global url."https://".insteadOf "git://"
+
+WORKDIR /workspace/node-postgres
+
+# run-tests.sh is copied in so it is available before the source volume is mounted.
+COPY run-tests.sh /usr/local/bin/run-tests.sh
+RUN chmod +x /usr/local/bin/run-tests.sh
+
+ENTRYPOINT ["/usr/local/bin/run-tests.sh"]
