@@ -391,6 +391,16 @@ class Client extends EventEmitter {
     this._attachListeners(con)
 
     con.once('end', () => {
+      // When load balancing is enabled, _connect() may replace `this.connection`
+      // with a new Connection on a different host as part of an internal retry.
+      // The old Connection's listeners stay attached and its socket eventually
+      // fires 'end'. If we ran the regular handler in that case we would call
+      // _errorAllQueries() and reject queries that belong to the new, healthy
+      // Connection. Detect the orphan and bail out.
+      if (this.connection !== con) {
+        logger.silly("Ignoring 'end' from orphan connection (Client moved to a different host)")
+        return
+      }
       const error = this._ending ? new Error('Connection terminated') : new Error('Connection terminated unexpectedly')
 
       clearTimeout(this.connectionTimeoutHandle)
@@ -796,6 +806,18 @@ class Client extends EventEmitter {
   }
 
   connect(callback) {
+    // When no callback is given, callers expect a Promise that resolves only
+    // after the connection (including any internal retry/failover) succeeds.
+    // The load-balance branch below wraps the work in `lock.acquire().then(...)`
+    // but does not return that chain, so the function would otherwise return
+    // `undefined` synchronously and `await client.connect()` would not actually
+    // wait. Wrap the callback-style path in a Promise here to make both forms
+    // behave consistently with upstream pg.
+    if (!callback) {
+      return new this._Promise((resolve, reject) => {
+        this.connect((err) => (err ? reject(err) : resolve(this)))
+      })
+    }
     if (this.connectionParameters.loadBalance === 'false') {
       logger.silly("Loadbalance is false, falling to upstream behaviour")
       return this.nowConnect(callback)
