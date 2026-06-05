@@ -826,14 +826,14 @@ class Client extends EventEmitter {
     ToDo: We are holding the lock until the user connection gets created. 
     This looks like an overkill, why is this required?
     */
-    lock.acquire().then(() => {
+    return lock.acquire().then(() => {
       logger.silly("loadBalance: " + this.connectionParameters.loadBalance)
       logger.silly("topologyKeys: " + this.connectionParameters.topologyKeys)
       logger.silly("ybServersRefreshInterval: " + this.connectionParameters.ybServersRefreshInterval)
       logger.silly("fallbackToTopologyKeysOnly: " + this.connectionParameters.fallbackToTopologyKeysOnly)
       logger.silly("failedHostReconnectDelaySecs: " + this.connectionParameters.failedHostReconnectDelaySecs)
       if (Client.controlClient === undefined) {
-        this.getConnection()
+        return this.getConnection()
           .then(async (res) => {
             Client.controlClient = res
             this.getServersInfo()
@@ -861,7 +861,7 @@ class Client extends EventEmitter {
           })
       } else {
         if (this.isRefreshRequired()) {
-          this.getServersInfo()
+          return this.getServersInfo()
             .then((res) => {
               this.updateMetaData(res.rows)
               if (this.connectionParameters.topologyKeys !== '') {
@@ -891,6 +891,16 @@ class Client extends EventEmitter {
           }
         }
       }
+    })
+    .catch((err) => {
+      // A synchronous throw from the load-balance path above (e.g.
+      // getLeastLoadedServer() finding no eligible server, or topology-key
+      // parsing) would otherwise leak as an unhandled rejection while the user
+      // callback is never invoked -- so `await connect()` hangs forever -- and
+      // the lock acquired above is never released, deadlocking every later
+      // connect. Release the lock and surface the error through the callback.
+      lock.release()
+      callback(err)
     })
   }
 
