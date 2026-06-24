@@ -553,6 +553,13 @@ class Client extends EventEmitter {
             logger.silly("Attempting to create control connection to " + client.host)
             await client.nowConnect()
           }
+        } else {
+          // Only a single address resolved (e.g. a literal seed IP) and it is
+          // unreachable. There is nothing left to retry, so surface the error
+          // instead of returning a never-connected control client, otherwise
+          // getServersInfo() would later query a dead client whose request
+          // never settles, hanging connect() forever.
+          throw err
         }
       })
     }
@@ -563,27 +570,21 @@ class Client extends EventEmitter {
 
   async getServersInfo() {
     logger.silly("Refreshing server info")
-    var client = Client.controlClient
-    var result
-    await client
-      .query({
+    const queryYbServers = (client) =>
+      client.query({
         text: YB_SERVERS_QUERY,
         statement_timeout: 10000, // Timeout after 10 seconds
       })
-      .then((res) => {
-        result = res
-      })
-      .catch((err) => {
-        this.getConnection()
-          .then(async (res) => {
-            Client.controlClient = res
-            await this.getServersInfo()
-          })
-          .catch((err) => {
-            return this.nowConnect(callback)
-          })
-      })
-    return result
+    try {
+      return await queryYbServers(Client.controlClient)
+    } catch (err) {
+      // The existing control connection is unusable. Rebuild it once and retry;
+      // if getConnection() cannot reach any node it rejects, and we propagate
+      // that error to the caller rather than swallowing it.
+      logger.silly("Control connection query failed (" + err.message + "). Recreating control connection.")
+      Client.controlClient = await this.getConnection()
+      return await queryYbServers(Client.controlClient)
+    }
   }
 
   createServersList(data) {
@@ -697,7 +698,15 @@ class Client extends EventEmitter {
                 Client.failedHostsTime.delete(this.host)
               }
               lock.release()
-              this.connect(callback)
+              // Only retry by re-entering connect() if there is server info to
+              // pick a different host from. With no metadata (e.g. the bootstrap
+              // host is down on the very first connect) re-entering would loop
+              // forever, so surface the error to the caller instead.
+              if (Client.hostServerInfoPrimary.size !== 0 || Client.hostServerInfoRR.size !== 0) {
+                this.connect(callback)
+              } else {
+                callback(error)
+              }
             } else {
               callback(error)
               return
@@ -834,25 +843,23 @@ class Client extends EventEmitter {
       logger.silly("failedHostReconnectDelaySecs: " + this.connectionParameters.failedHostReconnectDelaySecs)
       if (Client.controlClient === undefined) {
         return this.getConnection()
-          .then(async (res) => {
+          .then((res) => {
             Client.controlClient = res
-            this.getServersInfo()
-              .catch((err) => {
-                logger.silly("Not able to get servers info due to error " + err.message)
+            // Return the getServersInfo() chain so that connect() only settles
+            // once metadata has been built and nowConnect() has been called.
+            return this.getServersInfo()
+              .then((info) => {
+                this.createMetaData(info.rows)
                 return this.nowConnect(callback)
               })
-              .then((res) => {
-                try {
-                  this.createMetaData(res.rows)
-                  return this.nowConnect(callback)
-                } catch (err) {
-                  if (err.message.includes('Bad Topology Key found')) {
-                    throw err
-                  } else {
-                    //ToDo: Why not throw the error?
-                    logger.debug("Error caught: " + err.message)
-                  }
+              .catch((err) => {
+                if (err.message.includes('Bad Topology Key found')) {
+                  throw err
                 }
+                // Could not build metadata; fall back to a direct connection
+                // to the given host instead of hanging.
+                logger.silly("Not able to get servers info due to error " + err.message)
+                return this.nowConnect(callback)
               })
           })
           .catch((err) => {
