@@ -391,6 +391,16 @@ class Client extends EventEmitter {
     this._attachListeners(con)
 
     con.once('end', () => {
+      // When load balancing is enabled, _connect() may replace `this.connection`
+      // with a new Connection on a different host as part of an internal retry.
+      // The old Connection's listeners stay attached and its socket eventually
+      // fires 'end'. If we ran the regular handler in that case we would call
+      // _errorAllQueries() and reject queries that belong to the new, healthy
+      // Connection. Detect the orphan and bail out.
+      if (this.connection !== con) {
+        logger.silly("Ignoring 'end' from orphan connection (Client moved to a different host)")
+        return
+      }
       const error = this._ending ? new Error('Connection terminated') : new Error('Connection terminated unexpectedly')
 
       clearTimeout(this.connectionTimeoutHandle)
@@ -543,6 +553,13 @@ class Client extends EventEmitter {
             logger.silly("Attempting to create control connection to " + client.host)
             await client.nowConnect()
           }
+        } else {
+          // Only a single address resolved (e.g. a literal seed IP) and it is
+          // unreachable. There is nothing left to retry, so surface the error
+          // instead of returning a never-connected control client, otherwise
+          // getServersInfo() would later query a dead client whose request
+          // never settles, hanging connect() forever.
+          throw err
         }
       })
     }
@@ -553,27 +570,21 @@ class Client extends EventEmitter {
 
   async getServersInfo() {
     logger.silly("Refreshing server info")
-    var client = Client.controlClient
-    var result
-    await client
-      .query({
+    const queryYbServers = (client) =>
+      client.query({
         text: YB_SERVERS_QUERY,
         statement_timeout: 10000, // Timeout after 10 seconds
       })
-      .then((res) => {
-        result = res
-      })
-      .catch((err) => {
-        this.getConnection()
-          .then(async (res) => {
-            Client.controlClient = res
-            await this.getServersInfo()
-          })
-          .catch((err) => {
-            return this.nowConnect(callback)
-          })
-      })
-    return result
+    try {
+      return await queryYbServers(Client.controlClient)
+    } catch (err) {
+      // The existing control connection is unusable. Rebuild it once and retry;
+      // if getConnection() cannot reach any node it rejects, and we propagate
+      // that error to the caller rather than swallowing it.
+      logger.silly("Control connection query failed (" + err.message + "). Recreating control connection.")
+      Client.controlClient = await this.getConnection()
+      return await queryYbServers(Client.controlClient)
+    }
   }
 
   createServersList(data) {
@@ -687,7 +698,15 @@ class Client extends EventEmitter {
                 Client.failedHostsTime.delete(this.host)
               }
               lock.release()
-              this.connect(callback)
+              // Only retry by re-entering connect() if there is server info to
+              // pick a different host from. With no metadata (e.g. the bootstrap
+              // host is down on the very first connect) re-entering would loop
+              // forever, so surface the error to the caller instead.
+              if (Client.hostServerInfoPrimary.size !== 0 || Client.hostServerInfoRR.size !== 0) {
+                this.connect(callback)
+              } else {
+                callback(error)
+              }
             } else {
               callback(error)
               return
@@ -796,6 +815,18 @@ class Client extends EventEmitter {
   }
 
   connect(callback) {
+    // When no callback is given, callers expect a Promise that resolves only
+    // after the connection (including any internal retry/failover) succeeds.
+    // The load-balance branch below wraps the work in `lock.acquire().then(...)`
+    // but does not return that chain, so the function would otherwise return
+    // `undefined` synchronously and `await client.connect()` would not actually
+    // wait. Wrap the callback-style path in a Promise here to make both forms
+    // behave consistently with upstream pg.
+    if (!callback) {
+      return new this._Promise((resolve, reject) => {
+        this.connect((err) => (err ? reject(err) : resolve(this)))
+      })
+    }
     if (this.connectionParameters.loadBalance === 'false') {
       logger.silly("Loadbalance is false, falling to upstream behaviour")
       return this.nowConnect(callback)
@@ -804,33 +835,31 @@ class Client extends EventEmitter {
     ToDo: We are holding the lock until the user connection gets created. 
     This looks like an overkill, why is this required?
     */
-    lock.acquire().then(() => {
+    return lock.acquire().then(() => {
       logger.silly("loadBalance: " + this.connectionParameters.loadBalance)
       logger.silly("topologyKeys: " + this.connectionParameters.topologyKeys)
       logger.silly("ybServersRefreshInterval: " + this.connectionParameters.ybServersRefreshInterval)
       logger.silly("fallbackToTopologyKeysOnly: " + this.connectionParameters.fallbackToTopologyKeysOnly)
       logger.silly("failedHostReconnectDelaySecs: " + this.connectionParameters.failedHostReconnectDelaySecs)
       if (Client.controlClient === undefined) {
-        this.getConnection()
-          .then(async (res) => {
+        return this.getConnection()
+          .then((res) => {
             Client.controlClient = res
-            this.getServersInfo()
-              .catch((err) => {
-                logger.silly("Not able to get servers info due to error " + err.message)
+            // Return the getServersInfo() chain so that connect() only settles
+            // once metadata has been built and nowConnect() has been called.
+            return this.getServersInfo()
+              .then((info) => {
+                this.createMetaData(info.rows)
                 return this.nowConnect(callback)
               })
-              .then((res) => {
-                try {
-                  this.createMetaData(res.rows)
-                  return this.nowConnect(callback)
-                } catch (err) {
-                  if (err.message.includes('Bad Topology Key found')) {
-                    throw err
-                  } else {
-                    //ToDo: Why not throw the error?
-                    logger.debug("Error caught: " + err.message)
-                  }
+              .catch((err) => {
+                if (err.message.includes('Bad Topology Key found')) {
+                  throw err
                 }
+                // Could not build metadata; fall back to a direct connection
+                // to the given host instead of hanging.
+                logger.silly("Not able to get servers info due to error " + err.message)
+                return this.nowConnect(callback)
               })
           })
           .catch((err) => {
@@ -839,7 +868,7 @@ class Client extends EventEmitter {
           })
       } else {
         if (this.isRefreshRequired()) {
-          this.getServersInfo()
+          return this.getServersInfo()
             .then((res) => {
               this.updateMetaData(res.rows)
               if (this.connectionParameters.topologyKeys !== '') {
@@ -869,6 +898,16 @@ class Client extends EventEmitter {
           }
         }
       }
+    })
+    .catch((err) => {
+      // A synchronous throw from the load-balance path above (e.g.
+      // getLeastLoadedServer() finding no eligible server, or topology-key
+      // parsing) would otherwise leak as an unhandled rejection while the user
+      // callback is never invoked -- so `await connect()` hangs forever -- and
+      // the lock acquired above is never released, deadlocking every later
+      // connect. Release the lock and surface the error through the callback.
+      lock.release()
+      callback(err)
     })
   }
 
