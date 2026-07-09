@@ -12,7 +12,7 @@ var Query = require('./query')
 var defaults = require('./defaults')
 var Connection = require('./connection')
 const dns = require('dns')
-const { logger } = require('./logger')
+const { logger, safeStringify, collectionToJSON, logLazy, redactConnectionString } = require('./logger')
 const YB_SERVERS_QUERY = 'SELECT * FROM yb_servers()'
 const DEFAULT_FAILED_HOST_TTL_SECONDS = 5
 
@@ -58,7 +58,8 @@ class Lock {
 const lock = new Lock()
 class Client extends EventEmitter {
   constructor(config) {
-    logger.silly("Received connection string " + config)
+    logLazy('silly', () => "Received connection string: " +
+      (typeof config === 'string' ? redactConnectionString(config) : safeStringify(config, true)))
     super()
     this.connectionParameters = new ConnectionParameters(config)
     this.user = this.connectionParameters.user
@@ -159,7 +160,7 @@ class Client extends EventEmitter {
   }
 
   getLeastLoadedServer(hostsList) {
-    logger.silly("getLeastLoadedServer(): hostsList" + [...hostsList])
+    logLazy('silly', () => "getLeastLoadedServer(): hostsList" + collectionToJSON(hostsList))
     if (hostsList.size === 0) {
       return this.host
     }
@@ -173,7 +174,7 @@ class Client extends EventEmitter {
     } else {
       hostServerInfo = new Map(Client.hostServerInfoRR);
     }
-    logger.silly("Potential hosts: " + [...hostServerInfo])
+    logLazy('silly', () => "Potential hosts: " + collectionToJSON(hostServerInfo))
     let minConnectionCount = Number.MAX_VALUE
     let leastLoadedHosts = []
     for (var i = 1; i <= Client.topologyKeyMap.size; i++) {
@@ -455,9 +456,9 @@ class Client extends EventEmitter {
   }
 
   async iterateHostList(client) {
-    logger.silly("hostServerInfoPrimary: " + [...Client.hostServerInfoPrimary])
-    logger.silly("hostServerInfoRR: " + [...Client.hostServerInfoRR])
-    logger.silly("failedHosts: " + [...Client.failedHosts])
+    logLazy('silly', () => "hostServerInfoPrimary: " + collectionToJSON(Client.hostServerInfoPrimary))
+    logLazy('silly', () => "hostServerInfoRR: " + collectionToJSON(Client.hostServerInfoRR))
+    logLazy('silly', () => "failedHosts: " + collectionToJSON(Client.failedHosts))
     let upHostsList = [...Client.hostServerInfoPrimary.keys(), ...Client.hostServerInfoRR.keys()][Symbol.iterator]()
     let upHost = upHostsList.next()
     let hostIsUp = false
@@ -607,8 +608,8 @@ class Client extends EventEmitter {
         }
       }
     })
-    logger.debug("Updated hostServerInfoPrimary to " + [...Client.hostServerInfoPrimary] + " and usePublic to " + Client.usePublic)
-    logger.debug("Updated hostServerInfoRR to " + [...Client.hostServerInfoRR] + " and usePublic to " + Client.usePublic)
+    logLazy('debug', () => "Updated hostServerInfoPrimary to " + collectionToJSON(Client.hostServerInfoPrimary) + " and usePublic to " + Client.usePublic)
+    logLazy('debug', () => "Updated hostServerInfoRR to " + collectionToJSON(Client.hostServerInfoRR) + " and usePublic to " + Client.usePublic)
   }
 
   createConnectionMap(data) {
@@ -632,7 +633,7 @@ class Client extends EventEmitter {
         }
       }
     })
-    logger.debug("Updated connection map " + [...Client.connectionMap])
+    logLazy('debug', () => "Updated connection map " + collectionToJSON(Client.connectionMap))
   }
 
   createTopologyKeyMap() {
@@ -657,7 +658,7 @@ class Client extends EventEmitter {
         throw new Error('Bad Topology Key found - ' + key)
       }
     }
-    logger.debug("Updated topologyKey Map " + [...Client.topologyKeyMap])
+    logLazy('debug', () => "Updated topologyKey Map " + collectionToJSON(Client.topologyKeyMap))
   }
 
   createMetaData(data) {
@@ -791,8 +792,8 @@ class Client extends EventEmitter {
         Client.connectionMap.delete(eachHost)
       }
     }
-    logger.debug("Updated connection Map after refresh " + [...Client.connectionMap]);
-    logger.debug("Updated failed host list after refresh " + [...Client.failedHosts]);
+    logLazy('debug', () => "Updated connection Map after refresh " + collectionToJSON(Client.connectionMap));
+    logLazy('debug', () => "Updated failed host list after refresh " + collectionToJSON(Client.failedHosts));
   }
 
   updateMetaData(data) {
