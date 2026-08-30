@@ -4973,6 +4973,11 @@ pg-types@^2.1.0:
     postgres-date "~1.0.4"
     postgres-interval "^1.1.0"
 
+"pg-types@npm:@stackline/pg-types@1.0.0":
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/@stackline/pg-types/-/pg-types-1.0.0.tgz#b4df3539743965a763e3707b52f3cb0b607b74b1"
+  integrity sha512-wUWs1y6J4VadqXMeeAefjhc2r8A2kKdGDnAJxfuxQpg6fyjhPhhEVvMVpP/4q0mY69a0gVBmIQ5yjBLPcB5Irw==
+
 pg@^8.7.3:
   version "8.12.0"
   resolved "https://registry.yarnpkg.com/pg/-/pg-8.12.0.tgz#9341724db571022490b657908f65aee8db91df79"

@@ -30,7 +30,7 @@
     "pg-connection-string": "^2.5.0",
     "@yugabytedb/pg-pool": "^3.5.1-yb-3",
     "pg-protocol": "^1.5.0",
-    "pg-types": "^2.1.0",
+    "pg-types": "npm:@stackline/pg-types@1.0.0",
     "pgpass": "1.x",
     "winston": "^3.14.2"
   },
