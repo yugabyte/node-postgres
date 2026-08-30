@@ -10,6 +10,12 @@ test('ensure types is exported on root object', function () {
   assert(pg.types.setTypeParser)
 })
 
+test('types parses representative PostgreSQL values', function () {
+  var pg = require('../../lib')
+  assert.strictEqual(pg.types.getTypeParser(pg.types.builtins.INT4)('42'), 42)
+  assert.deepEqual(pg.types.getTypeParser(1007)('{1,2,NULL}'), [1, 2, null])
+})
+
 // this tests the monkey patching
 // to ensure comptability with older
 // versions of node
